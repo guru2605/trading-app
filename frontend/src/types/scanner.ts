@@ -33,8 +33,14 @@ export interface SignalUpdateRequest {
   status: string;
 }
 
+export interface SymbolInput {
+  tradingsymbol: string;
+  exchange: string;
+}
+
 export interface ScanRequest {
   timeframe?: string;
+  symbols?: SymbolInput[];
 }
 
 export interface ScanResultItem {
@@ -59,4 +65,13 @@ export interface InstrumentSearchResult {
   tradingsymbol: string;
   name: string;
   exchange: string;
+}
+
+export interface ScanStatus {
+  last_scan: string | null;
+  status: string | null;
+  symbols_scanned: number;
+  signals_generated: number;
+  errors_count: number;
+  duration_seconds: number;
 }

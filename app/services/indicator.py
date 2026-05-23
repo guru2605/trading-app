@@ -31,6 +31,11 @@ class ScannerConfig:
     stoch_rsi_oversold: float = 20.0
     stoch_rsi_overbought: float = 80.0
     candle_body_ratio: float = 0.3  # doji body <= 30% of range
+    ema_medium: int = 50
+    ema_long: int = 200
+    fib_lookback: int = 50
+    fib_proximity_pct: float = 1.0
+    volume_trend_days: int = 3
 
 
 class IndicatorService:
@@ -175,11 +180,33 @@ class IndicatorService:
 
         ratio = current_vol / avg_vol if avg_vol > 0 else 1.0
 
+        # Volume trend: 3-day slope
+        trend = "flat"
+        acceleration = 1.0
+        n = self.config.volume_trend_days
+        if len(df) >= n + 1:
+            recent_vols = df["volume"].iloc[-(n + 1) :].values
+            prev_vol = float(recent_vols[-2])
+            acceleration = current_vol / prev_vol if prev_vol > 0 else 1.0
+            vol_start = float(recent_vols[0])
+            vol_end = float(recent_vols[-1])
+            if vol_end > vol_start * 1.1:
+                trend = "rising"
+            elif vol_end < vol_start * 0.9:
+                trend = "falling"
+
+        # Volume confirms price direction
+        price_up = float(df["close"].iloc[-1]) > float(df["close"].iloc[-2]) if len(df) >= 2 else True
+        confirmed = (price_up and trend == "rising") or (not price_up and trend == "rising")
+
         return {
             "current": current_vol,
             "sma": round(avg_vol, 0),
             "ratio": round(ratio, 2),
             "spike": ratio >= self.config.volume_spike_ratio,
+            "trend": trend,
+            "acceleration": round(acceleration, 2),
+            "confirmed": confirmed,
         }
 
     def _compute_atr(self, df: pd.DataFrame) -> dict[str, Any]:
@@ -352,4 +379,100 @@ class IndicatorService:
             "low": round(low_52w, 2),
             "near_high": near_high,
             "near_low": near_low,
+        }
+
+    def _compute_ema_trend(self, df: pd.DataFrame) -> dict[str, Any]:
+        """Compute EMA 50/200 trend on daily data. Requires 205+ bars."""
+        if len(df) < self.config.ema_long + 5:
+            return {"available": False}
+
+        ema50 = ta.trend.EMAIndicator(close=df["close"], window=self.config.ema_medium).ema_indicator()
+        ema200 = ta.trend.EMAIndicator(close=df["close"], window=self.config.ema_long).ema_indicator()
+
+        curr_ema50 = float(ema50.iloc[-1])
+        curr_ema200 = float(ema200.iloc[-1])
+        prev_ema50 = float(ema50.iloc[-2])
+        prev_ema200 = float(ema200.iloc[-2])
+        current_price = float(df["close"].iloc[-1])
+
+        golden_cross = prev_ema50 <= prev_ema200 and curr_ema50 > curr_ema200
+        death_cross = prev_ema50 >= prev_ema200 and curr_ema50 < curr_ema200
+        strong_uptrend = current_price > curr_ema50 > curr_ema200
+        strong_downtrend = current_price < curr_ema50 < curr_ema200
+
+        return {
+            "available": True,
+            "ema50": round(curr_ema50, 2),
+            "ema200": round(curr_ema200, 2),
+            "golden_cross": golden_cross,
+            "death_cross": death_cross,
+            "strong_uptrend": strong_uptrend,
+            "strong_downtrend": strong_downtrend,
+        }
+
+    def _compute_relative_strength(self, df: pd.DataFrame, benchmark_return_5d: float | None) -> dict[str, Any]:
+        """Compare stock's 5-day return to benchmark (Nifty 50)."""
+        if benchmark_return_5d is None or len(df) < 6:
+            return {"available": False}
+
+        close_now = float(df["close"].iloc[-1])
+        close_5d_ago = float(df["close"].iloc[-6])
+        if close_5d_ago <= 0:
+            return {"available": False}
+
+        stock_return = (close_now - close_5d_ago) / close_5d_ago * 100
+        relative_strength = stock_return - benchmark_return_5d
+
+        return {
+            "available": True,
+            "stock_return_5d": round(stock_return, 2),
+            "benchmark_return_5d": round(benchmark_return_5d, 2),
+            "relative_strength": round(relative_strength, 2),
+            "outperformer": relative_strength > 2.0,
+            "underperformer": relative_strength < -2.0,
+        }
+
+    def _compute_fibonacci(self, df: pd.DataFrame) -> dict[str, Any]:
+        """Calculate Fibonacci retracement levels from recent swing high/low."""
+        lookback = min(self.config.fib_lookback, len(df))
+        if lookback < 10:
+            return {"available": False}
+
+        recent = df.tail(lookback)
+        swing_high = float(recent["high"].max())
+        swing_low = float(recent["low"].min())
+        current_price = float(df["close"].iloc[-1])
+
+        diff = swing_high - swing_low
+        if diff <= 0:
+            return {"available": False}
+
+        fib_382 = swing_high - diff * 0.382
+        fib_500 = swing_high - diff * 0.500
+        fib_618 = swing_high - diff * 0.618
+
+        proximity = current_price * self.config.fib_proximity_pct / 100
+        near_fib = (
+            abs(current_price - fib_382) <= proximity
+            or abs(current_price - fib_500) <= proximity
+            or abs(current_price - fib_618) <= proximity
+        )
+
+        nearest_level: float | None = None
+        min_dist = float("inf")
+        for level in (fib_382, fib_500, fib_618):
+            dist = abs(current_price - level)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_level = level
+
+        return {
+            "available": True,
+            "swing_high": round(swing_high, 2),
+            "swing_low": round(swing_low, 2),
+            "fib_382": round(fib_382, 2),
+            "fib_500": round(fib_500, 2),
+            "fib_618": round(fib_618, 2),
+            "near_fib_level": near_fib,
+            "nearest_level": round(nearest_level, 2) if nearest_level is not None else None,
         }

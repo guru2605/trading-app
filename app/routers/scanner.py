@@ -1,9 +1,18 @@
+import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.deps import get_db, get_optional_kite_client
+from app.deps import get_db, get_optional_kite_client, get_redis
 from app.kite.client import KiteClient
-from app.schemas.scanner import ScanRequest, ScanResponse, SignalResponse, SignalUpdateRequest
+from app.schemas.scanner import (
+    ExpireAllRequest,
+    ExpireAllResponse,
+    ScanRequest,
+    ScanResponse,
+    ScanStatusResponse,
+    SignalResponse,
+    SignalUpdateRequest,
+)
 from app.services.audit import AuditService
 from app.services.scanner import ScannerService
 
@@ -17,7 +26,11 @@ async def run_scan(
     kite: KiteClient | None = Depends(get_optional_kite_client),
 ) -> ScanResponse:
     service = ScannerService(db, kite)
-    results, errors = await service.scan_watchlist(timeframe=req.timeframe)
+    if req.symbols:
+        symbols = [(s.tradingsymbol, s.exchange) for s in req.symbols]
+        results, errors = await service.scan_symbols(symbols, timeframe=req.timeframe)
+    else:
+        results, errors = await service.scan_watchlist(timeframe=req.timeframe)
 
     audit = AuditService(db)
     await audit.log(
@@ -39,6 +52,23 @@ async def run_scan(
     )
 
 
+@router.get("/scanner/status", response_model=ScanStatusResponse)
+async def scan_status(
+    redis: aioredis.Redis = Depends(get_redis),
+) -> ScanStatusResponse:
+    status_data: dict[str, str] = await redis.hgetall("scanner:status")  # type: ignore[misc]
+    if not status_data:
+        return ScanStatusResponse()
+    return ScanStatusResponse(
+        last_scan=status_data.get("last_scan"),
+        status=status_data.get("status"),
+        symbols_scanned=int(status_data.get("symbols_scanned", 0)),
+        signals_generated=int(status_data.get("signals_generated", 0)),
+        errors_count=int(status_data.get("errors_count", 0)),
+        duration_seconds=float(status_data.get("duration_seconds", 0.0)),
+    )
+
+
 @router.get("/signals", response_model=list[SignalResponse])
 async def list_signals(
     status: str | None = None,
@@ -49,6 +79,16 @@ async def list_signals(
 ) -> list[SignalResponse]:
     service = ScannerService(db, kite)
     return await service.list_signals(status=status, signal_type=signal_type, tradingsymbol=tradingsymbol)
+
+
+@router.post("/signals/expire-all", response_model=ExpireAllResponse)
+async def expire_all_signals(
+    req: ExpireAllRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ExpireAllResponse:
+    service = ScannerService(db)
+    count = await service.expire_all_signals(tradingsymbols=req.tradingsymbols)
+    return ExpireAllResponse(expired=count)
 
 
 @router.get("/signals/{signal_id}", response_model=SignalResponse)

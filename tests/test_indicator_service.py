@@ -268,3 +268,77 @@ class TestIndicatorService:
         service = IndicatorService()
         result = service.compute_all(df)
         assert len(result) == 12
+
+    def test_ema_trend_structure(self) -> None:
+        df = _make_ohlcv(n=252, trend="up")
+        service = IndicatorService()
+        result = service._compute_ema_trend(df)
+        assert result["available"] is True
+        assert "ema50" in result
+        assert "ema200" in result
+        assert isinstance(result["golden_cross"], bool)
+        assert isinstance(result["death_cross"], bool)
+        assert isinstance(result["strong_uptrend"], bool)
+        assert isinstance(result["strong_downtrend"], bool)
+
+    def test_ema_trend_uptrend(self) -> None:
+        df = _make_ohlcv(n=252, trend="up", volatility=0.3)
+        service = IndicatorService()
+        result = service._compute_ema_trend(df)
+        assert result["available"] is True
+        assert result["strong_uptrend"] is True
+        assert result["strong_downtrend"] is False
+
+    def test_ema_trend_insufficient_data(self) -> None:
+        df = _make_ohlcv(n=100)
+        service = IndicatorService()
+        result = service._compute_ema_trend(df)
+        assert result == {"available": False}
+
+    def test_volume_trend_fields(self) -> None:
+        df = _make_ohlcv(n=100)
+        service = IndicatorService()
+        result = service.compute_all(df)
+        vol = result["volume"]
+        assert vol["trend"] in ("rising", "falling", "flat")
+        assert isinstance(vol["acceleration"], float)
+        assert isinstance(vol["confirmed"], bool)
+
+    def test_relative_strength_outperformer(self) -> None:
+        df = _make_ohlcv(n=100, trend="up", volatility=0.3)
+        service = IndicatorService()
+        result = service._compute_relative_strength(df, benchmark_return_5d=-5.0)
+        assert result["available"] is True
+        assert result["stock_return_5d"] > result["benchmark_return_5d"]  # outperforms benchmark
+        assert result["outperformer"] is True  # stock beats benchmark by > 2%
+
+    def test_relative_strength_no_benchmark(self) -> None:
+        df = _make_ohlcv(n=100)
+        service = IndicatorService()
+        result = service._compute_relative_strength(df, benchmark_return_5d=None)
+        assert result == {"available": False}
+
+    def test_relative_strength_insufficient_data(self) -> None:
+        df = _make_ohlcv(n=5)
+        service = IndicatorService()
+        result = service._compute_relative_strength(df, benchmark_return_5d=1.0)
+        assert result == {"available": False}
+
+    def test_fibonacci_structure(self) -> None:
+        df = _make_ohlcv(n=100, volatility=2.0)
+        service = IndicatorService()
+        result = service._compute_fibonacci(df)
+        assert result["available"] is True
+        assert "swing_high" in result
+        assert "swing_low" in result
+        assert "fib_382" in result
+        assert "fib_500" in result
+        assert "fib_618" in result
+        assert isinstance(result["near_fib_level"], bool)
+        assert result["fib_382"] > result["fib_500"] > result["fib_618"]
+
+    def test_fibonacci_insufficient_data(self) -> None:
+        df = _make_ohlcv(n=5)
+        service = IndicatorService()
+        result = service._compute_fibonacci(df)
+        assert result == {"available": False}

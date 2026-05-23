@@ -3,6 +3,7 @@ import type {
   InstrumentSearchResult,
   ScanRequest,
   ScanResponse,
+  ScanStatus,
   Signal,
   SignalUpdateRequest,
   WatchlistItem,
@@ -26,7 +27,10 @@ export async function removeFromWatchlist(id: number): Promise<void> {
 }
 
 export async function runScan(req?: ScanRequest): Promise<ScanResponse> {
-  const { data } = await client.post<ScanResponse>("/scanner/scan", req ?? {});
+  const payload: Record<string, unknown> = {};
+  if (req?.timeframe) payload.timeframe = req.timeframe;
+  if (req?.symbols) payload.symbols = req.symbols;
+  const { data } = await client.post<ScanResponse>("/scanner/scan", payload);
   return data;
 }
 
@@ -52,6 +56,16 @@ export async function updateSignalStatus(
   return data;
 }
 
+export async function expireAllSignals(
+  tradingsymbols?: string[],
+): Promise<{ expired: number }> {
+  const { data } = await client.post<{ expired: number }>(
+    "/signals/expire-all",
+    tradingsymbols ? { tradingsymbols } : {},
+  );
+  return data;
+}
+
 export async function importFromHoldings(): Promise<{
   added: number;
   message: string;
@@ -59,6 +73,11 @@ export async function importFromHoldings(): Promise<{
   const { data } = await client.post<{ added: number; message: string }>(
     "/watchlist/import-holdings",
   );
+  return data;
+}
+
+export async function fetchScanStatus(): Promise<ScanStatus> {
+  const { data } = await client.get<ScanStatus>("/scanner/status");
   return data;
 }
 

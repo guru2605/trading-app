@@ -48,11 +48,25 @@ class SignalUpdateRequest(BaseModel):
     status: str  # executed / expired
 
 
+class ExpireAllRequest(BaseModel):
+    tradingsymbols: list[str] | None = None  # if provided, only expire these
+
+
+class ExpireAllResponse(BaseModel):
+    expired: int
+
+
 # ── Scanner ──
+
+
+class SymbolInput(BaseModel):
+    tradingsymbol: str
+    exchange: str = "NSE"
 
 
 class ScanRequest(BaseModel):
     timeframe: str = "15minute"
+    symbols: list[SymbolInput] | None = None
 
 
 class ScanResultItem(BaseModel):
@@ -71,3 +85,12 @@ class ScanResponse(BaseModel):
     signals_generated: int
     results: list[ScanResultItem]
     errors: list[str] = []
+
+
+class ScanStatusResponse(BaseModel):
+    last_scan: str | None = None
+    status: str | None = None
+    symbols_scanned: int = 0
+    signals_generated: int = 0
+    errors_count: int = 0
+    duration_seconds: float = 0.0

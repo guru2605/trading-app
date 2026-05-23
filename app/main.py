@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -5,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.deps import close_redis
+from app.deps import close_redis, get_redis
 from app.routers import (
     alerts,
     audit,
@@ -23,11 +25,17 @@ from app.routers import (
     watchlist,
 )
 from app.routers.auth import kite_callback_router
+from app.tasks.background_scanner import background_scanner_loop
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    redis = await get_redis()
+    scanner_task = asyncio.create_task(background_scanner_loop(redis))
     yield
+    scanner_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await scanner_task
     await close_redis()
 
 
