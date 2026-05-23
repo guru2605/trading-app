@@ -16,19 +16,40 @@ logger = logging.getLogger(__name__)
 
 SCAN_INTERVAL_SECONDS = 3600  # 1 hour
 POLL_INTERVAL_SECONDS = 60  # check for active signals every 60s
+SCAN_TIMEFRAMES = ["15minute", "day"]
 
 
 async def run_background_scan(redis: aioredis.Redis) -> None:
-    """Run a single background scan of all index symbols and store metadata in Redis."""
+    """Run a single background scan of all index symbols across multiple timeframes."""
     all_symbols = get_all_unique_symbols()
-    logger.info("Background scan starting: %d unique symbols", len(all_symbols))
+    logger.info(
+        "Background scan starting: %d unique symbols, timeframes=%s",
+        len(all_symbols),
+        SCAN_TIMEFRAMES,
+    )
     start = datetime.now(UTC)
+
+    total_signals = 0
+    total_errors = 0
 
     try:
         async with async_session() as db:
             service = ScannerService(db)
             service._semaphore = asyncio.Semaphore(5)
-            results, errors = await service.scan_symbols(all_symbols, timeframe="15minute")
+
+            for timeframe in SCAN_TIMEFRAMES:
+                logger.info("Scanning timeframe: %s", timeframe)
+                results, errors = await service.scan_symbols(all_symbols, timeframe=timeframe)
+                total_signals += len(results)
+                total_errors += len(errors)
+                logger.info(
+                    "Timeframe %s: %d signals, %d errors",
+                    timeframe,
+                    len(results),
+                    len(errors),
+                )
+                if errors:
+                    logger.warning("Errors for %s: %s", timeframe, errors[:10])
 
         duration = (datetime.now(UTC) - start).total_seconds()
         now_iso = datetime.now(UTC).isoformat()
@@ -40,20 +61,18 @@ async def run_background_scan(redis: aioredis.Redis) -> None:
                 "last_scan": now_iso,
                 "status": "completed",
                 "symbols_scanned": str(len(all_symbols)),
-                "signals_generated": str(len(results)),
-                "errors_count": str(len(errors)),
+                "signals_generated": str(total_signals),
+                "errors_count": str(total_errors),
                 "duration_seconds": f"{duration:.1f}",
             },
         )
 
         logger.info(
             "Background scan complete: %d signals, %d errors in %.1fs",
-            len(results),
-            len(errors),
+            total_signals,
+            total_errors,
             duration,
         )
-        if errors:
-            logger.warning("Background scan errors: %s", errors[:10])
 
     except Exception:
         logger.exception("Background scan failed")

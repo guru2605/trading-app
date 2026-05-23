@@ -38,6 +38,7 @@ export async function fetchSignals(params?: {
   status?: string;
   signal_type?: string;
   tradingsymbol?: string;
+  timeframe?: string;
 }): Promise<Signal[]> {
   const { data } = await client.get<Signal[]>("/signals", { params });
   return data;

@@ -24,6 +24,7 @@ import type {
   Signal,
   WatchlistItem,
 } from "../types/scanner";
+import { exportSignalsPdf } from "../utils/exportPdf";
 import { timeAgo } from "../utils/time";
 
 type SortKey =
@@ -69,6 +70,7 @@ export default function ScannerPage() {
   // Signals
   const [signals, setSignals] = useState<Signal[]>([]);
   const [statusFilter, setStatusFilter] = useState("active");
+  const [timeframeFilter, setTimeframeFilter] = useState("");
   const [expandedSignal, setExpandedSignal] = useState<number | null>(null);
 
   // Background scan status
@@ -94,14 +96,15 @@ export default function ScannerPage() {
 
   const loadSignals = useCallback(async () => {
     try {
-      const data = await fetchSignals(
-        statusFilter ? { status: statusFilter } : undefined,
-      );
+      const params: Record<string, string> = {};
+      if (statusFilter) params.status = statusFilter;
+      if (timeframeFilter) params.timeframe = timeframeFilter;
+      const data = await fetchSignals(params);
       setSignals(data);
     } catch {
       setError("Failed to load signals.");
     }
-  }, [statusFilter]);
+  }, [statusFilter, timeframeFilter]);
 
   useEffect(() => {
     async function init() {
@@ -532,6 +535,15 @@ export default function ScannerPage() {
           />
         )}
         <select
+          value={timeframeFilter}
+          onChange={(e) => setTimeframeFilter(e.target.value)}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
+        >
+          <option value="">All Timeframes</option>
+          <option value="15minute">Intraday 15m</option>
+          <option value="day">Daily</option>
+        </select>
+        <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm"
@@ -541,6 +553,14 @@ export default function ScannerPage() {
           <option value="expired">Expired</option>
           <option value="">All</option>
         </select>
+        {isTop10 && sortedSignals.length > 0 && (
+          <button
+            onClick={() => exportSignalsPdf(sortedSignals)}
+            className="rounded-lg bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-100"
+          >
+            Export PDF
+          </button>
+        )}
         {sortedSignals.some((s) => s.status === "active") && (
           <button
             onClick={handleExpireAll}
@@ -606,7 +626,15 @@ export default function ScannerPage() {
                       {s.signal_type}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{s.timeframe}</td>
+                  <td className="px-4 py-3 text-gray-500">
+                    <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${
+                      s.timeframe === "day"
+                        ? "bg-purple-100 text-purple-700"
+                        : "bg-blue-50 text-blue-600"
+                    }`}>
+                      {s.timeframe === "day" ? "Daily" : s.timeframe === "15minute" ? "15m" : s.timeframe}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-right">{s.entry_price}</td>
                   <td className="px-4 py-3 text-right text-red-600">
                     {s.stop_loss}

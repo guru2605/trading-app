@@ -229,8 +229,9 @@ class ScannerService:
         if confidence < self.scoring_config.min_confidence:
             return None
 
-        # Post-scoring multipliers
-        confidence = self._apply_mtf_confirmation(confidence, signal_type, daily_context)
+        # Post-scoring multipliers (skip MTF when timeframe is daily — same data)
+        if timeframe != "day":
+            confidence = self._apply_mtf_confirmation(confidence, signal_type, daily_context)
         confidence = self._apply_vix_filter(confidence, signal_type, vix_value)
         confidence = await self._apply_earnings_filter(confidence, tradingsymbol, exchange)
         confidence = min(confidence, 100.0)
@@ -837,6 +838,7 @@ class ScannerService:
         status: str | None = None,
         signal_type: str | None = None,
         tradingsymbol: str | None = None,
+        timeframe: str | None = None,
     ) -> list[SignalResponse]:
         query = select(Signal).order_by(Signal.created_at.desc())
         if status:
@@ -845,6 +847,8 @@ class ScannerService:
             query = query.where(Signal.signal_type == signal_type)
         if tradingsymbol:
             query = query.where(Signal.tradingsymbol == tradingsymbol.upper())
+        if timeframe:
+            query = query.where(Signal.timeframe == timeframe)
         result = await self.db.execute(query)
         signals = list(result.scalars().all())
         return [SignalResponse.model_validate(s) for s in signals]

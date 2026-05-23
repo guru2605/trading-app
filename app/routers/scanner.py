@@ -74,11 +74,14 @@ async def list_signals(
     status: str | None = None,
     signal_type: str | None = None,
     tradingsymbol: str | None = None,
+    timeframe: str | None = None,
     db: AsyncSession = Depends(get_db),
     kite: KiteClient | None = Depends(get_optional_kite_client),
 ) -> list[SignalResponse]:
     service = ScannerService(db, kite)
-    return await service.list_signals(status=status, signal_type=signal_type, tradingsymbol=tradingsymbol)
+    return await service.list_signals(
+        status=status, signal_type=signal_type, tradingsymbol=tradingsymbol, timeframe=timeframe
+    )
 
 
 @router.post("/signals/expire-all", response_model=ExpireAllResponse)
