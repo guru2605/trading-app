@@ -23,7 +23,9 @@ class SignalScoringConfig:
     atr_sl_multiplier: float = 1.5
     risk_reward_ratio: float = 2.0
     sr_sl_tightening_pct: float = 0.3  # tighten SL by 30% when near S/R
-    max_raw_score: float = 380.0  # Phase 1-3: weighted + confluence + trend + RS + fib + delivery + sentiment + FII
+    max_raw_score: float = (
+        250.0  # Realistic strong signal (theoretical max ~357, but typical strong signals hit 150-200)
+    )
 
 
 class ScannerService:

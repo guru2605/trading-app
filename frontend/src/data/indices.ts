@@ -227,6 +227,55 @@ export const NIFTY_500_EXTRA = nse([
   "RADICO", "SUPREMEIND",
 ]);
 
+// Additional Nifty 500 constituents not covered by the indices above
+export const NIFTY_500_REMAINING = nse([
+  "360ONE", "AADHARHFC", "AAVAS", "ABBOTINDIA", "ABDL",
+  "ABLBL", "ABREL", "ABSLAMC", "ACE", "ACMESOLAR",
+  "ACUTAAS", "ADANIENSOL", "ADANIPOWER", "AEGISLOG", "AEGISVOPAK",
+  "AFCONS", "AIIL", "AJANTPHARM", "ANANDRATHI", "ANANTRAJ",
+  "ANTHEM", "ANURAS", "APARINDS", "APOLLOTYRE", "ARE&M",
+  "ASAHIINDIA", "ASTERDM", "ATHERENERG", "AWL", "BAJAJHFL",
+  "BAYERCROP", "BBTC", "BELRISE", "BEML", "BERGEPAINT",
+  "BHARTIHEXA", "BIKAJI", "BLS", "BLUEJET", "CANHLIFE",
+  "CAPLIPOINT", "CARBORUNIV", "CARTRADE", "CCL", "CEATLTD",
+  "CEMPRO", "CGCL", "CHALET", "CHOICEIN", "CHOLAHLDNG",
+  "COHANCE", "CONCORDBIO", "CPPLUS", "CRAFTSMAN", "CREDITACC",
+  "CUB", "DCMSHRIRAM", "DEEPAKFERT", "DELHIVERY", "DEVYANI",
+  "DOMS", "ECLERX", "EIDPARRY", "ELECON", "EMCURE",
+  "EMMVEE", "ENRIN", "FACT", "FIRSTCRY", "FIVESTAR",
+  "FORCEMOT", "FSL", "GABRIEL", "GALLANTT", "GLAND",
+  "GMDCLTD", "GODFRYPHLP", "GODIGIT", "GODREJIND", "GPIL",
+  "GRAPHITE", "GRAVITA", "GROWW", "GRSE", "GVT&D",
+  "HBLENGINE", "HDBFS", "HDFCAMC", "HEXT", "HFCL",
+  "HOMEFIRST", "HONASA", "HUDCO", "HYUNDAI", "ICICIAMC",
+  "IDBI", "IFCI", "IGIL", "IIFL", "IKS",
+  "INDGN", "INDUSTOWER", "INOXWIND", "IREDA", "ITCHOTELS",
+  "J&KBANK", "JAINREC", "JBCHEPHARM", "JBMA", "JINDALSAW",
+  "JKTYRE", "JMFINANCIL", "JSL", "JSWCEMENT", "JSWDULUX",
+  "JUBLPHARMA", "JWL", "JYOTICNC", "KALYANKJIL", "KARURVYSYA",
+  "KAYNES", "KFINTECH", "KIMS", "KIRLOSENG", "KPRMILL",
+  "LATENTVIEW", "LENSKART", "LGEINDIA", "LINDEINDIA", "LLOYDSME",
+  "LTF", "LTFOODS", "LTM", "MANKIND", "MAPMYINDIA",
+  "MEDANTA", "MEESHO", "MINDACORP", "MSUMI", "NAM-INDIA",
+  "NAVA", "NCC", "NETWEB", "NEULANDLAB", "NEWGEN",
+  "NH", "NIVABUPA", "NSLNISP", "NTPCGREEN", "NUVAMA",
+  "NUVOCO", "NYKAA", "OIL", "OLAELEC", "OLECTRA",
+  "ONESOURCE", "PARADEEP", "PATANJALI", "PAYTM", "PCBL",
+  "PFIZER", "PGEL", "PINELABS", "PIRAMALFIN", "PNBHOUSING",
+  "POWERINDIA", "PPLPHARMA", "PREMIERENE", "PTCIL", "PWL",
+  "RAILTEL", "RAINBOW", "REDINGTON", "RHIM", "RITES",
+  "RKFORGE", "RPOWER", "RRKABEL", "SAGILITY", "SAILIFE",
+  "SAMMAANCAP", "SAPPHIRE", "SARDAEN", "SBFC", "SCHNEIDER",
+  "SCI", "SHYAMMETL", "SIGNATURE", "SONATSOFTW", "SPLPETRO",
+  "SUNDARMFIN", "SUZLON", "SWANCORP", "SWIGGY", "SYRMA",
+  "TARIL", "TATACAP", "TATAINVEST", "TATATECH", "TBOTEK",
+  "TECHNOE", "TEGA", "TEJASNET", "TENNIND", "THELEELA",
+  "TITAGARH", "TMCV", "TMPV", "TRAVELFOOD", "UNITDSPR",
+  "UNOMINDA", "URBANCO", "USHAMART", "UTIAMC", "VIJAYA",
+  "VMM", "VTL", "WAAREEENER", "WELSPUNLIV", "WOCKPHARMA",
+  "ZENTEC", "ZFCVINDIA", "ZYDUSWELL",
+]);
+
 // ── Tab config ──
 
 export type ScannerTab =
@@ -238,6 +287,7 @@ export type ScannerTab =
   | "niftymidcap100"
   | "niftysmallcap100"
   | "nifty500extra"
+  | "nifty500remaining"
   | "niftybank"
   | "niftyit"
   | "niftyauto"
@@ -271,6 +321,7 @@ export const SCANNER_TABS: TabConfig[] = [
   { key: "niftymidcap100", label: "Midcap 100", group: "Broad Market", symbols: NIFTY_MIDCAP_100 },
   { key: "niftysmallcap100", label: "Smallcap 100", group: "Broad Market", symbols: NIFTY_SMALLCAP_100 },
   { key: "nifty500extra", label: "Nifty 500 Others", group: "Broad Market", symbols: NIFTY_500_EXTRA },
+  { key: "nifty500remaining", label: "Nifty 500 Rest", group: "Broad Market", symbols: NIFTY_500_REMAINING },
   // Sectors
   { key: "niftybank", label: "Bank", group: "Sector", symbols: NIFTY_BANK },
   { key: "niftypsubank", label: "PSU Bank", group: "Sector", symbols: NIFTY_PSU_BANK },
