@@ -102,7 +102,7 @@ async def get_allocation(
 @router.get("/correlation", response_model=CorrelationResponse)
 async def get_correlation(
     db: AsyncSession = Depends(get_db),
-    kite: KiteClient = Depends(get_kite_client),
+    kite: KiteClient | None = Depends(get_optional_kite_client),
 ) -> CorrelationResponse:
     service = CorrelationService(db, kite)
     return await service.compute_correlation()

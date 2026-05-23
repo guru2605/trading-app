@@ -15,6 +15,9 @@ class JournalEntry(Base):
     entry_type: Mapped[str] = mapped_column(String(20))  # pre_trade / post_trade / note
     content: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[str] = mapped_column(String(500), default="")  # comma-separated
+    strategy: Mapped[str] = mapped_column(String(50), default="")  # breakout, mean_reversion, scalp
+    outcome: Mapped[str] = mapped_column(String(20), default="")  # win, loss, breakeven
+    emotional_state: Mapped[str] = mapped_column(String(30), default="")  # confident, anxious, fomo, revenge, neutral
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -75,8 +75,18 @@ class TestIndicatorService:
         result = service.compute_all(df)
 
         expected_keys = {
-            "rsi", "macd", "ema", "bollinger", "vwap", "volume", "atr",
-            "adx", "stoch_rsi", "candlestick", "support_resistance", "week_52",
+            "rsi",
+            "macd",
+            "ema",
+            "bollinger",
+            "vwap",
+            "volume",
+            "atr",
+            "adx",
+            "stoch_rsi",
+            "candlestick",
+            "support_resistance",
+            "week_52",
         }
         assert set(result.keys()) == expected_keys
 

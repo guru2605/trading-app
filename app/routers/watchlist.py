@@ -73,7 +73,4 @@ async def search_instruments(
         .limit(20)
     )
     result = await db.execute(query)
-    return [
-        {"tradingsymbol": row.tradingsymbol, "name": row.name, "exchange": row.exchange}
-        for row in result.all()
-    ]
+    return [{"tradingsymbol": row.tradingsymbol, "name": row.name, "exchange": row.exchange} for row in result.all()]

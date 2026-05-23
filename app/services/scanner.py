@@ -8,11 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.kite.client import KiteClient
-from app.models.instrument import Instrument
 from app.models.signal import Signal
 from app.models.watchlist_item import WatchlistItem
 from app.schemas.scanner import ScanResultItem, SignalResponse
 from app.services.indicator import IndicatorService, ScannerConfig
+from app.services.market_data import MarketDataService
 
 
 @dataclass(frozen=True)
@@ -28,12 +28,13 @@ class ScannerService:
     def __init__(
         self,
         db: AsyncSession,
-        kite: KiteClient,
+        kite: KiteClient | None = None,
         scanner_config: ScannerConfig | None = None,
         scoring_config: SignalScoringConfig | None = None,
     ) -> None:
         self.db = db
         self.kite = kite
+        self.market_data = MarketDataService()
         self.indicator_service = IndicatorService(scanner_config)
         self.scoring_config = scoring_config or SignalScoringConfig()
         self._semaphore = asyncio.Semaphore(3)
@@ -51,23 +52,10 @@ class ScannerService:
         if not watchlist:
             return [], []
 
-        # Resolve instrument tokens
-        symbols = [w.tradingsymbol for w in watchlist]
-        exchanges = {w.tradingsymbol: w.exchange for w in watchlist}
-        token_map = await self._resolve_tokens(symbols, exchanges)
-
-        # Report unresolved symbols
-        for item in watchlist:
-            if item.tradingsymbol not in token_map:
-                errors.append(f"{item.tradingsymbol}: instrument token not found. Run Sync Holdings first.")
-
         # Fetch historical data and compute signals concurrently
         tasks = []
         for item in watchlist:
-            token = token_map.get(item.tradingsymbol)
-            if token is None:
-                continue
-            tasks.append(self._process_symbol(item.tradingsymbol, item.exchange, token, timeframe))
+            tasks.append(self._process_symbol(item.tradingsymbol, item.exchange, timeframe))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -76,19 +64,15 @@ class ScannerService:
             if isinstance(r, ScanResultItem):
                 scan_results.append(r)
             elif isinstance(r, Exception):
-                # Find which symbol this error belongs to
-                resolved_items = [it for it in watchlist if it.tradingsymbol in token_map]
-                sym = resolved_items[i].tradingsymbol if i < len(resolved_items) else "unknown"
+                sym = watchlist[i].tradingsymbol if i < len(watchlist) else "unknown"
                 errors.append(f"{sym}: {r}")
 
         return scan_results, errors
 
-    async def _process_symbol(
-        self, tradingsymbol: str, exchange: str, token: int, timeframe: str
-    ) -> ScanResultItem | None:
+    async def _process_symbol(self, tradingsymbol: str, exchange: str, timeframe: str) -> ScanResultItem | None:
         """Fetch candles, compute indicators, score, and persist signal for one symbol."""
         async with self._semaphore:
-            candles = await self._fetch_candles(token, timeframe)
+            candles = await self._fetch_candles(tradingsymbol, exchange, timeframe)
 
         if not candles:
             return None
@@ -155,22 +139,13 @@ class ScannerService:
             rationale=rationale,
         )
 
-    async def _fetch_candles(self, token: int, timeframe: str) -> list[dict[str, Any]]:
+    async def _fetch_candles(self, tradingsymbol: str, exchange: str, timeframe: str) -> list[dict[str, Any]]:
         to_date = datetime.now(UTC)
         if timeframe in ("5minute", "15minute", "30minute"):
             from_date = to_date - timedelta(days=7)
         else:
             from_date = to_date - timedelta(days=365)
-        return await self.kite.historical_data(token, from_date, to_date, timeframe)
-
-    async def _resolve_tokens(self, symbols: list[str], exchanges: dict[str, str]) -> dict[str, int]:
-        result = await self.db.execute(select(Instrument).where(Instrument.tradingsymbol.in_(symbols)))
-        instruments = list(result.scalars().all())
-        token_map: dict[str, int] = {}
-        for inst in instruments:
-            if inst.tradingsymbol in exchanges and inst.exchange == exchanges[inst.tradingsymbol]:
-                token_map[inst.tradingsymbol] = inst.instrument_token
-        return token_map
+        return await self.market_data.fetch_historical(tradingsymbol, exchange, from_date, to_date, timeframe)
 
     async def _expire_old_signals(self) -> None:
         today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)

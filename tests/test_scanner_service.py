@@ -1,12 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.instrument import Instrument
 from app.models.signal import Signal
 from app.models.watchlist_item import WatchlistItem
 from app.services.scanner import ScannerService, SignalScoringConfig
@@ -34,16 +33,8 @@ def _make_candles(n: int = 100, base: float = 100.0) -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def mock_kite() -> AsyncMock:
-    kite = AsyncMock()
-    kite.historical_data = AsyncMock(return_value=_make_candles(100))
-    kite.ltp = AsyncMock(return_value={})
-    return kite
-
-
-@pytest.fixture
-def scanner_service(db_session: AsyncSession, mock_kite: AsyncMock) -> ScannerService:
-    return ScannerService(db_session, mock_kite)
+def scanner_service(db_session: AsyncSession) -> ScannerService:
+    return ScannerService(db_session)
 
 
 class TestScannerServiceScoring:
@@ -308,26 +299,16 @@ class TestScannerServiceCRUD:
         assert results == []
         assert errors == []
 
-    async def test_scan_watchlist_with_items(self, db_session: AsyncSession, mock_kite: AsyncMock) -> None:
+    async def test_scan_watchlist_with_items(self, db_session: AsyncSession) -> None:
         # Add watchlist item
         item = WatchlistItem(tradingsymbol="RELIANCE", exchange="NSE", notes="")
         db_session.add(item)
-
-        # Add instrument for token resolution
-        inst = Instrument(
-            instrument_token=738561,
-            exchange_token=2885,
-            tradingsymbol="RELIANCE",
-            name="Reliance Industries",
-            exchange="NSE",
-            segment="NSE",
-            instrument_type="EQ",
-        )
-        db_session.add(inst)
         await db_session.commit()
 
-        service = ScannerService(db_session, mock_kite)
-        results, errors = await service.scan_watchlist()
+        service = ScannerService(db_session)
+        with patch.object(service.market_data, "fetch_historical", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = _make_candles(100)
+            results, errors = await service.scan_watchlist()
         # Results depend on synthetic data scoring — just verify no crash
         assert isinstance(results, list)
         assert isinstance(errors, list)

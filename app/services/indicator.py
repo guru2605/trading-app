@@ -196,9 +196,7 @@ class IndicatorService:
         }
 
     def _compute_adx(self, df: pd.DataFrame) -> dict[str, Any]:
-        adx = ta.trend.ADXIndicator(
-            high=df["high"], low=df["low"], close=df["close"], window=self.config.adx_period
-        )
+        adx = ta.trend.ADXIndicator(high=df["high"], low=df["low"], close=df["close"], window=self.config.adx_period)
         adx_value = float(adx.adx().iloc[-1])
         plus_di = float(adx.adx_pos().iloc[-1])
         minus_di = float(adx.adx_neg().iloc[-1])

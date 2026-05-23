@@ -54,3 +54,39 @@ class KiteClient:
             interval,
         )
         return result
+
+    async def place_order(
+        self,
+        variety: str,
+        exchange: str,
+        tradingsymbol: str,
+        transaction_type: str,
+        quantity: int,
+        product: str,
+        order_type: str,
+        price: float | None = None,
+        trigger_price: float | None = None,
+    ) -> str:
+        kwargs: dict[str, Any] = {
+            "variety": variety,
+            "exchange": exchange,
+            "tradingsymbol": tradingsymbol,
+            "transaction_type": transaction_type,
+            "quantity": quantity,
+            "product": product,
+            "order_type": order_type,
+        }
+        if price is not None:
+            kwargs["price"] = price
+        if trigger_price is not None:
+            kwargs["trigger_price"] = trigger_price
+        order_id: str = await asyncio.to_thread(self._kite.place_order, **kwargs)
+        return order_id
+
+    async def cancel_order(self, variety: str, order_id: str) -> str:
+        result: str = await asyncio.to_thread(self._kite.cancel_order, variety, order_id)
+        return result
+
+    async def order_margins(self, params: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = await asyncio.to_thread(self._kite.order_margins, params)
+        return result
