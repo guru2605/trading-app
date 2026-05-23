@@ -6,7 +6,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.deps import close_redis
-from app.routers import alerts, audit, auth, portfolio, risk, scanner, status, trades, watchlist
+from app.routers import (
+    alerts,
+    audit,
+    auth,
+    behavior,
+    journal,
+    orders,
+    portfolio,
+    risk,
+    rules,
+    scanner,
+    status,
+    tax,
+    trades,
+    watchlist,
+)
 from app.routers.auth import kite_callback_router
 
 
@@ -38,6 +53,11 @@ def create_app() -> FastAPI:
     application.include_router(alerts.router)
     application.include_router(watchlist.router)
     application.include_router(scanner.router)
+    application.include_router(journal.router)
+    application.include_router(behavior.router)
+    application.include_router(orders.router)
+    application.include_router(rules.router)
+    application.include_router(tax.router)
     return application
 
 

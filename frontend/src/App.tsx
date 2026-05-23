@@ -2,16 +2,22 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchAuthStatus } from "./api/client";
 import AlertsPage from "./pages/AlertsPage";
 import Dashboard from "./pages/Dashboard";
+import JournalPage from "./pages/JournalPage";
+import OrdersPage from "./pages/OrdersPage";
 import ScannerPage from "./pages/ScannerPage";
+import TaxReportPage from "./pages/TaxReportPage";
 import TradesPage from "./pages/TradesPage";
 
-type Tab = "dashboard" | "trades" | "alerts" | "scanner";
+type Tab = "dashboard" | "trades" | "alerts" | "scanner" | "journal" | "orders" | "tax";
 
 const tabs: { key: Tab; label: string }[] = [
   { key: "dashboard", label: "Dashboard" },
   { key: "trades", label: "Trades" },
+  { key: "orders", label: "Orders" },
   { key: "alerts", label: "Alerts" },
   { key: "scanner", label: "Scanner" },
+  { key: "journal", label: "Journal" },
+  { key: "tax", label: "Tax" },
 ];
 
 function App() {
@@ -110,8 +116,11 @@ function App() {
 
       {activeTab === "dashboard" && <Dashboard />}
       {activeTab === "trades" && <TradesPage />}
+      {activeTab === "orders" && <OrdersPage />}
       {activeTab === "alerts" && <AlertsPage />}
       {activeTab === "scanner" && <ScannerPage />}
+      {activeTab === "journal" && <JournalPage />}
+      {activeTab === "tax" && <TaxReportPage />}
     </div>
   );
 }
