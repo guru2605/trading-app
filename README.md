@@ -18,7 +18,7 @@ A self-hosted trading platform built on Zerodha's Kite Connect API. Portfolio tr
 
 ### Scanner (Signal Generator)
 
-The scanner runs a background scan every hour across ~338 index stocks, computing BUY/SELL signals with entry, stop-loss, target, confidence score, and detailed rationale. Signals are deduplicated (same symbol + timeframe = upsert) and auto-expired after 2 days.
+The scanner runs a background scan every hour across ~561 Nifty 500 stocks on **two timeframes** (15-minute intraday and daily), computing BUY/SELL signals with entry, stop-loss, target, confidence score, and detailed rationale. Signals are deduplicated (same symbol + timeframe = upsert) and auto-expired after 2 days.
 
 #### Signal Selection Pipeline
 
@@ -142,14 +142,18 @@ Filter: confidence < 40% → discard
 **Step 8 — Persist & Lifecycle:**
 - Upsert: same symbol + timeframe → update existing active signal
 - Auto-expire: signals older than 2 days
-- Rescan: every 1 hour (immediate rescan if all signals expire)
+- Rescan: every 1 hour across both timeframes (immediate rescan if all signals expire)
 
 #### Frontend Tabs
-- **Top 10** — highest confidence signals across all stocks (default view)
+- **Top 10** — highest confidence signals across all stocks (default view), with **Export PDF** button
 - **All Signals** — every signal with symbol search filter
 - **Index tabs** — pre-computed data per index (no manual "Run Scan")
 - **Watchlist** — manual "Run Scan" for user's custom symbols
+- **Timeframe filter** — filter signals by "Intraday 15m" or "Daily"
 - **Freshness badge** — shows time since last scan
+
+#### PDF Export
+- One-click **Export PDF** on the Top 10 tab downloads a PDF with signal details (symbol, type, entry/SL/target, confidence, timeframe) and full rationale for each signal
 
 #### Watchlist Management
 - **Import from Holdings** — one-click import of all portfolio holdings into scanner watchlist
@@ -249,7 +253,7 @@ POST /api/portfolio/sync-instruments — Sync instrument master
 ```
 POST /api/scanner/scan            — Run scanner on watchlist (manual)
 GET  /api/scanner/status          — Background scanner status (last scan time, count, duration)
-GET  /api/signals                 — List signals (filter: status, signal_type, tradingsymbol)
+GET  /api/signals                 — List signals (filter: status, signal_type, tradingsymbol, timeframe)
 GET  /api/signals/{id}            — Signal detail with full indicator data
 PUT  /api/signals/{id}            — Update status (executed/expired)
 POST /api/signals/expire-all      — Expire all active signals
@@ -313,7 +317,7 @@ poetry run mypy .
 │   ├── deps.py                # Dependency injection
 │   ├── db/                    # Database session + base model
 │   ├── data/
-│   │   └── indices.py         # 20 NSE index lists (338 unique symbols)
+│   │   └── indices.py         # 21 NSE index lists (561 unique Nifty 500 symbols)
 │   ├── kite/                  # Kite Connect auth + async client
 │   ├── models/                # SQLAlchemy ORM models
 │   ├── schemas/               # Pydantic request/response schemas
@@ -352,7 +356,7 @@ poetry run mypy .
 
 ## Notes
 
-- **Background scanner** runs automatically every hour. No manual "Run Scan" needed for index stocks. Watchlist tab still supports manual scanning.
+- **Background scanner** runs automatically every hour on two timeframes (15-minute and daily). No manual "Run Scan" needed for index stocks. Watchlist tab still supports manual scanning.
 - **Kite Historical Data Add-on** is required for the scanner to fetch OHLCV candles. Without it, scans will return errors with "Insufficient permission". Subscribe at [developers.kite.trade](https://developers.kite.trade).
 - **Kite sessions expire daily** — you need to re-login each trading day. The frontend detects this automatically and shows a login prompt.
 - **Rate limiting** — yfinance is used for market data. The scanner uses `asyncio.Semaphore(3)` to limit concurrency.
