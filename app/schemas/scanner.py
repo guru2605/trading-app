@@ -42,6 +42,10 @@ class SignalResponse(BaseModel):
     status: str
     created_at: datetime
     expired_at: datetime | None
+    outcome: str | None = None
+    actual_exit_price: float | None = None
+    actual_rr: float | None = None
+    outcome_at: datetime | None = None
 
 
 class SignalUpdateRequest(BaseModel):

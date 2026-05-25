@@ -3,6 +3,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
+import pandas as pd
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +54,10 @@ class TestScannerServiceScoring:
             "candlestick": {"hammer": True, "bullish_engulfing": True},
             "relative_strength": {"available": True, "outperformer": True, "underperformer": False},
             "fibonacci": {"near_fib_level": True},
+            "supertrend": {"buy_signal": True, "bullish": True, "bearish": False, "sell_signal": False},
+            "obv": {"bullish_divergence": True, "rising": True, "falling": False, "bearish_divergence": False},
+            "cmf": {"strong_bullish": True, "bullish": True, "strong_bearish": False, "bearish": False},
+            "intermarket": {"available": True, "risk_on": True, "risk_off": False, "risk_on_score": 4},
             "delivery": {"available": True, "delivery_pct": 70},
             "sentiment": {"available": True, "positive_sentiment": True, "negative_sentiment": False},
             "fii_dii": {"available": True, "fii_buying": True, "fii_selling": False},
@@ -67,8 +72,9 @@ class TestScannerServiceScoring:
         score = ScannerService._score_buy(indicators, ema_trend)
         # RSI: 30+15, MACD: 30+10, EMA: 22, VWAP: 10, BB: 15, Vol spike: 10, SR: 15, Breakout: 20, 52w: 3
         # ADX: 15, Stoch: 10+10, Candle: 7+10, EMA50/200: 20, RS: 15, VolTrend: 10, Fib: 10
-        # Delivery: 15, Sentiment: 10, FII: 5, Confluence(4): 40 = 357
-        assert score == 357
+        # Supertrend buy_signal: 22, OBV bullish_div: 12, CMF strong_bullish: 10, Intermarket risk_on: 8
+        # Delivery: 15, Sentiment: 10, FII: 5, Confluence(5): 40 = 409
+        assert score == 409
 
     def test_score_buy_no_signals(self) -> None:
         indicators: dict[str, Any] = {
@@ -102,6 +108,10 @@ class TestScannerServiceScoring:
             "candlestick": {"inverted_hammer": True, "bearish_engulfing": True},
             "relative_strength": {"available": True, "underperformer": True, "outperformer": False},
             "fibonacci": {"near_fib_level": True},
+            "supertrend": {"sell_signal": True, "bearish": True, "bullish": False, "buy_signal": False},
+            "obv": {"bearish_divergence": True, "falling": True, "rising": False, "bullish_divergence": False},
+            "cmf": {"strong_bearish": True, "bearish": True, "strong_bullish": False, "bullish": False},
+            "intermarket": {"available": True, "risk_off": True, "risk_on": False, "risk_on_score": 0},
             "delivery": {"available": True, "delivery_pct": 70},
             "sentiment": {"available": True, "negative_sentiment": True, "positive_sentiment": False},
             "fii_dii": {"available": True, "fii_selling": True, "fii_buying": False},
@@ -116,8 +126,9 @@ class TestScannerServiceScoring:
         score = ScannerService._score_sell(indicators, ema_trend)
         # RSI: 30+15, MACD: 30+10, EMA: 22, VWAP: 10, BB: 15, Vol spike: 10, SR: 15, Breakdown: 20, 52w: 3
         # ADX: 15, Stoch: 10+10, Candle: 7+10, EMA50/200: 20, RS: 15, VolTrend: 10, Fib: 10
-        # Delivery: 15, Sentiment: 10, FII: 5, Confluence(4): 40 = 357
-        assert score == 357
+        # Supertrend sell_signal: 22, OBV bearish_div: 12, CMF strong_bearish: 10, Intermarket risk_off: 8
+        # Delivery: 15, Sentiment: 10, FII: 5, Confluence(5): 40 = 409
+        assert score == 409
 
     def test_score_buy_partial(self) -> None:
         indicators: dict[str, Any] = {
@@ -656,6 +667,8 @@ class TestScannerServiceCRUD:
             patch.object(service.market_data, "fetch_vix", new_callable=AsyncMock) as mock_vix,
             patch.object(service.market_data, "fetch_nifty_return_5d", new_callable=AsyncMock) as mock_nifty,
             patch.object(service.market_data, "fetch_earnings_date", new_callable=AsyncMock) as mock_earnings,
+            patch.object(service.market_data, "fetch_intermarket_data", new_callable=AsyncMock) as mock_intermarket,
+            patch.object(service.market_data, "fetch_sector_rotation", new_callable=AsyncMock) as mock_sector,
             patch.object(service.nse_data, "fetch_fii_dii_activity", new_callable=AsyncMock) as mock_fii,
             patch.object(service.nse_data, "fetch_delivery_data", new_callable=AsyncMock) as mock_delivery,
             patch.object(service.sentiment, "fetch_sentiment", new_callable=AsyncMock) as mock_sentiment,
@@ -664,6 +677,8 @@ class TestScannerServiceCRUD:
             mock_vix.return_value = None
             mock_nifty.return_value = None
             mock_earnings.return_value = None
+            mock_intermarket.return_value = {"available": False}
+            mock_sector.return_value = {}
             mock_fii.return_value = {"available": False}
             mock_delivery.return_value = {"available": False}
             mock_sentiment.return_value = {"available": False}
@@ -671,6 +686,37 @@ class TestScannerServiceCRUD:
         # Results depend on synthetic data scoring — just verify no crash
         assert isinstance(results, list)
         assert isinstance(errors, list)
+
+    async def test_scan_watchlist_with_intermarket(self, db_session: AsyncSession) -> None:
+        """Verify intermarket data is fetched and passed through."""
+        item = WatchlistItem(tradingsymbol="INFY", exchange="NSE", notes="")
+        db_session.add(item)
+        await db_session.commit()
+
+        service = ScannerService(db_session)
+        with (
+            patch.object(service.market_data, "fetch_historical", new_callable=AsyncMock) as mock_fetch,
+            patch.object(service.market_data, "fetch_vix", new_callable=AsyncMock) as mock_vix,
+            patch.object(service.market_data, "fetch_nifty_return_5d", new_callable=AsyncMock) as mock_nifty,
+            patch.object(service.market_data, "fetch_earnings_date", new_callable=AsyncMock) as mock_earnings,
+            patch.object(service.market_data, "fetch_intermarket_data", new_callable=AsyncMock) as mock_intermarket,
+            patch.object(service.market_data, "fetch_sector_rotation", new_callable=AsyncMock) as mock_sector,
+            patch.object(service.nse_data, "fetch_fii_dii_activity", new_callable=AsyncMock) as mock_fii,
+            patch.object(service.nse_data, "fetch_delivery_data", new_callable=AsyncMock) as mock_delivery,
+            patch.object(service.sentiment, "fetch_sentiment", new_callable=AsyncMock) as mock_sentiment,
+        ):
+            mock_fetch.return_value = _make_candles(100)
+            mock_vix.return_value = None
+            mock_nifty.return_value = None
+            mock_earnings.return_value = None
+            mock_intermarket.return_value = {"available": True, "risk_on": True, "risk_off": False, "risk_on_score": 3}
+            mock_sector.return_value = {}
+            mock_fii.return_value = {"available": False}
+            mock_delivery.return_value = {"available": False}
+            mock_sentiment.return_value = {"available": False}
+            results, errors = await service.scan_watchlist()
+            mock_intermarket.assert_called_once()
+        assert isinstance(results, list)
 
     async def test_expire_old_signals(self, db_session: AsyncSession, scanner_service: ScannerService) -> None:
         old_signal = Signal(
@@ -699,3 +745,323 @@ class TestScannerServiceCRUD:
         await db_session.refresh(old_signal)
         assert old_signal.status == "expired"
         assert old_signal.expired_at is not None
+
+
+class TestScannerNewIndicatorScoring:
+    """Tests for Supertrend, OBV, CMF, and Intermarket scoring."""
+
+    def _base_indicators(self) -> dict[str, Any]:
+        return {
+            "rsi": {"oversold": False, "recovering_from_oversold": False},
+            "macd": {"bullish_crossover": False, "histogram_positive": False},
+            "ema": {"bullish_crossover": False, "bullish_trend": False},
+            "vwap": {"price_above_vwap": False},
+            "bollinger": {"near_lower": False},
+            "volume": {"spike": False},
+            "support_resistance": {"near_support": False, "near_resistance": False},
+            "week_52": {"near_low": False},
+        }
+
+    def test_supertrend_buy_signal_scoring(self) -> None:
+        indicators = self._base_indicators()
+        indicators["supertrend"] = {
+            "buy_signal": True,
+            "bullish": True,
+            "bearish": False,
+            "sell_signal": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        # supertrend buy_signal: 22 (primary)
+        assert score == 22
+
+    def test_supertrend_bullish_alignment_scoring(self) -> None:
+        indicators = self._base_indicators()
+        indicators["supertrend"] = {
+            "buy_signal": False,
+            "bullish": True,
+            "bearish": False,
+            "sell_signal": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == 10
+
+    def test_supertrend_bearish_penalty_buy(self) -> None:
+        indicators = self._base_indicators()
+        indicators["supertrend"] = {
+            "buy_signal": False,
+            "bullish": False,
+            "bearish": True,
+            "sell_signal": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == -8
+
+    def test_supertrend_sell_signal_scoring(self) -> None:
+        indicators = {
+            "rsi": {"overbought": False, "dropping_from_overbought": False},
+            "macd": {"bearish_crossover": False, "histogram_positive": True},
+            "ema": {"bearish_crossover": False, "bearish_trend": False},
+            "vwap": {"price_below_vwap": False},
+            "bollinger": {"near_upper": False},
+            "volume": {"spike": False},
+            "support_resistance": {"near_resistance": False, "near_support": False},
+            "week_52": {"near_high": False},
+            "supertrend": {
+                "sell_signal": True,
+                "bearish": True,
+                "bullish": False,
+                "buy_signal": False,
+            },
+        }
+        score = ScannerService._score_sell(indicators)
+        assert score == 22
+
+    def test_obv_bullish_divergence_buy(self) -> None:
+        indicators = self._base_indicators()
+        indicators["obv"] = {
+            "bullish_divergence": True,
+            "rising": True,
+            "falling": False,
+            "bearish_divergence": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == 12
+
+    def test_obv_rising_buy(self) -> None:
+        indicators = self._base_indicators()
+        indicators["obv"] = {
+            "bullish_divergence": False,
+            "rising": True,
+            "falling": False,
+            "bearish_divergence": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == 5
+
+    def test_obv_bearish_divergence_sell(self) -> None:
+        indicators = {
+            "rsi": {"overbought": False, "dropping_from_overbought": False},
+            "macd": {"bearish_crossover": False, "histogram_positive": True},
+            "ema": {"bearish_crossover": False, "bearish_trend": False},
+            "vwap": {"price_below_vwap": False},
+            "bollinger": {"near_upper": False},
+            "volume": {"spike": False},
+            "support_resistance": {"near_resistance": False, "near_support": False},
+            "week_52": {"near_high": False},
+            "obv": {
+                "bearish_divergence": True,
+                "falling": True,
+                "rising": False,
+                "bullish_divergence": False,
+            },
+        }
+        score = ScannerService._score_sell(indicators)
+        assert score == 12
+
+    def test_cmf_strong_bullish_buy(self) -> None:
+        indicators = self._base_indicators()
+        indicators["cmf"] = {
+            "strong_bullish": True,
+            "bullish": True,
+            "strong_bearish": False,
+            "bearish": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == 10
+
+    def test_cmf_bullish_buy(self) -> None:
+        indicators = self._base_indicators()
+        indicators["cmf"] = {
+            "strong_bullish": False,
+            "bullish": True,
+            "strong_bearish": False,
+            "bearish": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == 5
+
+    def test_intermarket_risk_on_buy(self) -> None:
+        indicators = self._base_indicators()
+        indicators["intermarket"] = {"available": True, "risk_on": True, "risk_off": False}
+        score = ScannerService._score_buy(indicators)
+        assert score == 8
+
+    def test_intermarket_risk_off_buy(self) -> None:
+        indicators = self._base_indicators()
+        indicators["intermarket"] = {"available": True, "risk_on": False, "risk_off": True}
+        score = ScannerService._score_buy(indicators)
+        assert score == -8
+
+    def test_intermarket_risk_off_sell(self) -> None:
+        indicators = {
+            "rsi": {"overbought": False, "dropping_from_overbought": False},
+            "macd": {"bearish_crossover": False, "histogram_positive": True},
+            "ema": {"bearish_crossover": False, "bearish_trend": False},
+            "vwap": {"price_below_vwap": False},
+            "bollinger": {"near_upper": False},
+            "volume": {"spike": False},
+            "support_resistance": {"near_resistance": False, "near_support": False},
+            "week_52": {"near_high": False},
+            "intermarket": {"available": True, "risk_on": False, "risk_off": True},
+        }
+        score = ScannerService._score_sell(indicators)
+        assert score == 8
+
+
+class TestATRNormalizationAndDrawdown:
+    def test_atr_high_volatility(self) -> None:
+        result = ScannerService._apply_atr_normalization(50.0, 5.0)
+        assert result == pytest.approx(42.5)  # 50 * 0.85
+
+    def test_atr_moderate_volatility(self) -> None:
+        result = ScannerService._apply_atr_normalization(50.0, 3.5)
+        assert result == pytest.approx(46.0)  # 50 * 0.92
+
+    def test_atr_low_volatility(self) -> None:
+        result = ScannerService._apply_atr_normalization(50.0, 1.0)
+        assert result == pytest.approx(52.5)  # 50 * 1.05
+
+    def test_atr_normal_volatility(self) -> None:
+        result = ScannerService._apply_atr_normalization(50.0, 2.0)
+        assert result == 50.0
+
+    def test_drawdown_filter_steep_buy(self) -> None:
+        # Create a DataFrame where price dropped >15% from 20-day high
+        # The high within the last 20 bars should be 120, close should be 100 => 16.7% drawdown
+        df = pd.DataFrame(
+            {
+                "open": [100.0] * 30,
+                "high": [100.0] * 10 + [120.0] + [100.0] * 19,
+                "low": [95.0] * 30,
+                "close": [100.0] * 30,
+                "volume": [100000.0] * 30,
+            }
+        )
+        result = ScannerService._apply_drawdown_filter(50.0, "BUY", df)
+        assert result == pytest.approx(40.0)  # 50 * 0.80
+
+    def test_drawdown_filter_no_drawdown(self) -> None:
+        df = pd.DataFrame(
+            {
+                "open": [100.0] * 30,
+                "high": [101.0] * 30,
+                "low": [99.0] * 30,
+                "close": [100.0] * 30,
+                "volume": [100000.0] * 30,
+            }
+        )
+        result = ScannerService._apply_drawdown_filter(50.0, "BUY", df)
+        assert result == 50.0
+
+    def test_drawdown_filter_sell_not_affected(self) -> None:
+        df = pd.DataFrame(
+            {
+                "open": [100.0] * 30,
+                "high": [120.0] * 10 + [100.0] * 20,
+                "low": [95.0] * 30,
+                "close": [100.0] * 30,
+                "volume": [100000.0] * 30,
+            }
+        )
+        result = ScannerService._apply_drawdown_filter(50.0, "SELL", df)
+        assert result == 50.0
+
+    def test_drawdown_filter_insufficient_data(self) -> None:
+        df = pd.DataFrame(
+            {
+                "open": [100.0] * 10,
+                "high": [120.0] * 10,
+                "low": [95.0] * 10,
+                "close": [100.0] * 10,
+                "volume": [100000.0] * 10,
+            }
+        )
+        result = ScannerService._apply_drawdown_filter(50.0, "BUY", df)
+        assert result == 50.0
+
+
+class TestIchimokuScoring:
+    """Test Ichimoku Cloud scoring in buy/sell functions."""
+
+    def _base_indicators(self) -> dict[str, Any]:
+        return {
+            "rsi": {"oversold": False, "recovering_from_oversold": False},
+            "macd": {"bullish_crossover": False, "histogram_positive": False},
+            "ema": {"bullish_crossover": False, "bullish_trend": False},
+            "vwap": {"price_above_vwap": False},
+            "bollinger": {"near_lower": False},
+            "volume": {"spike": False},
+            "support_resistance": {"near_support": False, "near_resistance": False},
+            "week_52": {"near_low": False},
+        }
+
+    def test_ichimoku_buy_above_cloud_with_tk_cross(self) -> None:
+        indicators = self._base_indicators()
+        indicators["ichimoku"] = {
+            "available": True,
+            "above_cloud": True,
+            "below_cloud": False,
+            "bullish_tk_cross": True,
+            "bearish_tk_cross": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == 15
+
+    def test_ichimoku_buy_above_cloud_no_cross(self) -> None:
+        indicators = self._base_indicators()
+        indicators["ichimoku"] = {
+            "available": True,
+            "above_cloud": True,
+            "below_cloud": False,
+            "bullish_tk_cross": False,
+            "bearish_tk_cross": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == 8
+
+    def test_ichimoku_buy_below_cloud_penalty(self) -> None:
+        indicators = self._base_indicators()
+        indicators["ichimoku"] = {
+            "available": True,
+            "above_cloud": False,
+            "below_cloud": True,
+            "bullish_tk_cross": False,
+            "bearish_tk_cross": False,
+        }
+        score = ScannerService._score_buy(indicators)
+        assert score == -10
+
+    def test_ichimoku_sell_below_cloud_with_tk_cross(self) -> None:
+        indicators = self._base_indicators()
+        indicators["ichimoku"] = {
+            "available": True,
+            "above_cloud": False,
+            "below_cloud": True,
+            "bullish_tk_cross": False,
+            "bearish_tk_cross": True,
+        }
+        score = ScannerService._score_sell(indicators)
+        # 15 (ichimoku) + 10 (MACD histogram negative from base)
+        assert score == 25
+
+    def test_ichimoku_sell_above_cloud_penalty(self) -> None:
+        indicators = self._base_indicators()
+        indicators["ichimoku"] = {
+            "available": True,
+            "above_cloud": True,
+            "below_cloud": False,
+            "bullish_tk_cross": False,
+            "bearish_tk_cross": False,
+        }
+        score = ScannerService._score_sell(indicators)
+        # -10 (ichimoku) + 10 (MACD histogram negative from base)
+        assert score == 0
+
+    def test_ichimoku_not_available_no_scoring(self) -> None:
+        indicators = self._base_indicators()
+        indicators["ichimoku"] = {"available": False}
+        score_buy = ScannerService._score_buy(indicators)
+        score_sell = ScannerService._score_sell(indicators)
+        assert score_buy == 0
+        # Sell base still gets +10 from MACD histogram negative
+        assert score_sell == 10

@@ -7,6 +7,7 @@ import pandas as pd
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.data.fno_stocks import is_fno_stock
 from app.kite.client import KiteClient
 from app.models.signal import Signal
 from app.models.watchlist_item import WatchlistItem
@@ -24,7 +25,7 @@ class SignalScoringConfig:
     risk_reward_ratio: float = 2.0
     sr_sl_tightening_pct: float = 0.3  # tighten SL by 30% when near S/R
     max_raw_score: float = (
-        250.0  # Realistic strong signal (theoretical max ~357, but typical strong signals hit 150-200)
+        270.0  # Realistic strong signal (theoretical max ~409, but typical strong signals hit 170-220)
     )
 
 
@@ -59,17 +60,28 @@ class ScannerService:
             return [], []
 
         # Fetch market context once for the entire scan
-        vix_value, nifty_return, fii_dii = await asyncio.gather(
+        vix_value, nifty_return, fii_dii, intermarket, sector_rotation = await asyncio.gather(
             self.market_data.fetch_vix(),
             self.market_data.fetch_nifty_return_5d(),
             self.nse_data.fetch_fii_dii_activity(),
+            self.market_data.fetch_intermarket_data(),
+            self.market_data.fetch_sector_rotation(),
         )
 
         # Fetch historical data and compute signals concurrently
         tasks = []
         for item in watchlist:
             tasks.append(
-                self._process_symbol(item.tradingsymbol, item.exchange, timeframe, vix_value, nifty_return, fii_dii)
+                self._process_symbol(
+                    item.tradingsymbol,
+                    item.exchange,
+                    timeframe,
+                    vix_value,
+                    nifty_return,
+                    fii_dii,
+                    intermarket,
+                    sector_rotation,
+                )
             )
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -88,13 +100,18 @@ class ScannerService:
             return [], []
 
         # Fetch market context once for the entire scan
-        vix_value, nifty_return, fii_dii = await asyncio.gather(
+        vix_value, nifty_return, fii_dii, intermarket, sector_rotation = await asyncio.gather(
             self.market_data.fetch_vix(),
             self.market_data.fetch_nifty_return_5d(),
             self.nse_data.fetch_fii_dii_activity(),
+            self.market_data.fetch_intermarket_data(),
+            self.market_data.fetch_sector_rotation(),
         )
 
-        tasks = [self._process_symbol(sym, exch, timeframe, vix_value, nifty_return, fii_dii) for sym, exch in symbols]
+        tasks = [
+            self._process_symbol(sym, exch, timeframe, vix_value, nifty_return, fii_dii, intermarket, sector_rotation)
+            for sym, exch in symbols
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         scan_results, errors = self._collect_results(results, [sym for sym, _ in symbols])
@@ -155,6 +172,8 @@ class ScannerService:
         vix_value: float | None = None,
         nifty_return: float | None = None,
         fii_dii: dict[str, Any] | None = None,
+        intermarket: dict[str, Any] | None = None,
+        sector_rotation: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[ScanResultItem, Signal] | None:
         """Fetch candles, compute indicators, and score one symbol. Does NOT touch the DB."""
         async with self._semaphore:
@@ -209,8 +228,47 @@ class ScannerService:
         if sentiment_data.get("available"):
             indicators["sentiment"] = sentiment_data
 
+        # Phase 3b: Options data (F&O stocks only)
+        if is_fno_stock(tradingsymbol):
+            options_data = await self.nse_data.fetch_option_chain(tradingsymbol)
+            if options_data.get("available"):
+                indicators["options"] = options_data
+
         if fii_dii and fii_dii.get("available"):
             indicators["fii_dii"] = fii_dii
+
+        if intermarket and intermarket.get("available"):
+            indicators["intermarket"] = intermarket
+
+        # Sector rotation
+        if sector_rotation:
+            from app.data.sector_mapping import get_stock_sector
+
+            sector = get_stock_sector(tradingsymbol)
+            if sector and sector in sector_rotation:
+                indicators["sector"] = {
+                    "available": True,
+                    "sector": sector,
+                    **sector_rotation[sector],
+                }
+
+        # ORB + Gap analysis (intraday only)
+        if timeframe in ("5minute", "15minute", "30minute") and daily_candles:
+            daily_df = self._candles_to_dataframe(daily_candles)
+            prev_day_high: float | None = None
+            prev_day_low: float | None = None
+            if not daily_df.empty and len(daily_df) >= 2:
+                prev_day_high = float(daily_df["high"].iloc[-2])
+                prev_day_low = float(daily_df["low"].iloc[-2])
+            orb_gap = self.indicator_service._compute_orb_gap(df, prev_day_high, prev_day_low)
+            if orb_gap.get("available"):
+                indicators["orb_gap"] = orb_gap
+
+        # Ichimoku Cloud (daily only)
+        if timeframe == "day":
+            ichimoku = self.indicator_service._compute_ichimoku(df)
+            if ichimoku.get("available"):
+                indicators["ichimoku"] = ichimoku
 
         buy_score = self._score_buy(indicators, ema_trend)
         sell_score = self._score_sell(indicators, ema_trend)
@@ -234,6 +292,9 @@ class ScannerService:
             confidence = self._apply_mtf_confirmation(confidence, signal_type, daily_context)
         confidence = self._apply_vix_filter(confidence, signal_type, vix_value)
         confidence = await self._apply_earnings_filter(confidence, tradingsymbol, exchange)
+        atr_pct = indicators.get("atr", {}).get("pct", 0.0)
+        confidence = self._apply_atr_normalization(confidence, atr_pct)
+        confidence = self._apply_drawdown_filter(confidence, signal_type, df)
         confidence = min(confidence, 100.0)
 
         if confidence < self.scoring_config.min_confidence:
@@ -405,6 +466,80 @@ class ScannerService:
         if fib.get("near_fib_level"):
             score += 10
 
+        # Supertrend
+        supertrend = indicators.get("supertrend", {})
+        if supertrend.get("buy_signal"):
+            score += 22
+            primary_count += 1
+        elif supertrend.get("bullish"):
+            score += 10
+        if supertrend.get("bearish"):
+            score -= 8
+
+        # OBV divergence
+        obv = indicators.get("obv", {})
+        if obv.get("bullish_divergence"):
+            score += 12
+        elif obv.get("rising"):
+            score += 5
+        if obv.get("bearish_divergence"):
+            score -= 5
+
+        # Chaikin Money Flow
+        cmf = indicators.get("cmf", {})
+        if cmf.get("strong_bullish"):
+            score += 10
+        elif cmf.get("bullish"):
+            score += 5
+        if cmf.get("strong_bearish"):
+            score -= 5
+
+        # Intermarket analysis
+        intermarket = indicators.get("intermarket", {})
+        if intermarket.get("available"):
+            if intermarket.get("risk_on"):
+                score += 8
+            elif intermarket.get("risk_off"):
+                score -= 8
+
+        # Options data (F&O stocks only)
+        options = indicators.get("options", {})
+        if options.get("available"):
+            if options.get("bullish_pcr"):
+                score += 12
+            if options.get("price_above_max_pain"):
+                score += 5
+
+        # ORB + Gap (intraday only)
+        orb = indicators.get("orb_gap", {})
+        if orb.get("available"):
+            if orb.get("breakout_with_volume") and orb.get("breakout_up"):
+                score += 15
+            elif orb.get("breakout_up"):
+                score += 8
+            if orb.get("gap_down") and orb.get("gap_fill_possible"):
+                score += 10
+
+        # Sector rotation
+        sector = indicators.get("sector", {})
+        if sector.get("available"):
+            quadrant = sector.get("quadrant", "")
+            if quadrant in ("Leading", "Improving"):
+                score += 10
+            elif quadrant == "Lagging":
+                score -= 5
+
+        # Ichimoku Cloud (daily only)
+        ichimoku = indicators.get("ichimoku", {})
+        if ichimoku.get("available"):
+            if ichimoku.get("above_cloud") and ichimoku.get("bullish_tk_cross"):
+                score += 15
+                primary_count += 1
+            elif ichimoku.get("above_cloud"):
+                score += 8
+            elif ichimoku.get("below_cloud"):
+                score -= 10
+
         # Delivery volume (Phase 3)
         delivery = indicators.get("delivery", {})
         if delivery.get("available"):
@@ -531,6 +666,80 @@ class ScannerService:
         if fib.get("near_fib_level"):
             score += 10
 
+        # Supertrend
+        supertrend = indicators.get("supertrend", {})
+        if supertrend.get("sell_signal"):
+            score += 22
+            primary_count += 1
+        elif supertrend.get("bearish"):
+            score += 10
+        if supertrend.get("bullish"):
+            score -= 8
+
+        # OBV divergence
+        obv = indicators.get("obv", {})
+        if obv.get("bearish_divergence"):
+            score += 12
+        elif obv.get("falling"):
+            score += 5
+        if obv.get("bullish_divergence"):
+            score -= 5
+
+        # Chaikin Money Flow
+        cmf = indicators.get("cmf", {})
+        if cmf.get("strong_bearish"):
+            score += 10
+        elif cmf.get("bearish"):
+            score += 5
+        if cmf.get("strong_bullish"):
+            score -= 5
+
+        # Intermarket analysis
+        intermarket = indicators.get("intermarket", {})
+        if intermarket.get("available"):
+            if intermarket.get("risk_off"):
+                score += 8
+            elif intermarket.get("risk_on"):
+                score -= 8
+
+        # Options data (F&O stocks only)
+        options = indicators.get("options", {})
+        if options.get("available"):
+            if options.get("bearish_pcr"):
+                score += 8
+            if options.get("price_below_max_pain"):
+                score += 5
+
+        # ORB + Gap (intraday only)
+        orb = indicators.get("orb_gap", {})
+        if orb.get("available"):
+            if orb.get("breakout_with_volume") and orb.get("breakout_down"):
+                score += 15
+            elif orb.get("breakout_down"):
+                score += 8
+            if orb.get("gap_up") and orb.get("gap_fill_possible"):
+                score += 10
+
+        # Sector rotation
+        sector = indicators.get("sector", {})
+        if sector.get("available"):
+            quadrant = sector.get("quadrant", "")
+            if quadrant in ("Lagging", "Weakening"):
+                score += 10
+            elif quadrant == "Leading":
+                score -= 5
+
+        # Ichimoku Cloud (daily only)
+        ichimoku = indicators.get("ichimoku", {})
+        if ichimoku.get("available"):
+            if ichimoku.get("below_cloud") and ichimoku.get("bearish_tk_cross"):
+                score += 15
+                primary_count += 1
+            elif ichimoku.get("below_cloud"):
+                score += 8
+            elif ichimoku.get("above_cloud"):
+                score -= 10
+
         # Delivery volume (Phase 3)
         delivery = indicators.get("delivery", {})
         if delivery.get("available"):
@@ -562,6 +771,30 @@ class ScannerService:
         return score
 
     # ── Post-scoring multipliers ──
+
+    @staticmethod
+    def _apply_atr_normalization(confidence: float, atr_pct: float) -> float:
+        """Reduce confidence for highly volatile stocks, slight boost for low-vol."""
+        if atr_pct > 4.0:
+            return confidence * 0.85
+        elif atr_pct > 3.0:
+            return confidence * 0.92
+        elif atr_pct < 1.5:
+            return confidence * 1.05
+        return confidence
+
+    @staticmethod
+    def _apply_drawdown_filter(confidence: float, signal_type: str, df: pd.DataFrame) -> float:
+        """Penalise BUY signals on stocks in steep drawdown from recent high."""
+        if signal_type != "BUY" or len(df) < 20:
+            return confidence
+        high_20d = float(df["high"].iloc[-20:].max())
+        current_price = float(df["close"].iloc[-1])
+        if high_20d > 0:
+            drawdown_pct = (high_20d - current_price) / high_20d * 100
+            if drawdown_pct > 15:
+                return confidence * 0.80
+        return confidence
 
     @staticmethod
     def _apply_mtf_confirmation(confidence: float, signal_type: str, daily_context: dict[str, Any]) -> float:
@@ -757,6 +990,43 @@ class ScannerService:
                     reasons.append(f"FII net buyers ({fii_dii.get('fii_net', 0):.0f} Cr)")
                 elif fii_dii.get("fii_selling"):
                     reasons.append(f"FII net sellers ({fii_dii.get('fii_net', 0):.0f} Cr)")
+            supertrend = indicators.get("supertrend", {})
+            if supertrend.get("buy_signal"):
+                reasons.append("Supertrend buy signal (flipped bullish)")
+            elif supertrend.get("bullish"):
+                reasons.append("Supertrend bullish alignment")
+            elif supertrend.get("bearish"):
+                reasons.append("Against Supertrend (bearish)")
+            obv = indicators.get("obv", {})
+            if obv.get("bullish_divergence"):
+                reasons.append("OBV bullish divergence (volume accumulation ahead of price)")
+            elif obv.get("rising"):
+                reasons.append("OBV rising (accumulation)")
+            cmf = indicators.get("cmf", {})
+            if cmf.get("strong_bullish"):
+                reasons.append(f"Strong buying pressure (CMF {cmf.get('value', 0):.2f})")
+            elif cmf.get("bullish"):
+                reasons.append("Positive money flow")
+            intermarket = indicators.get("intermarket", {})
+            if intermarket.get("available"):
+                if intermarket.get("risk_on"):
+                    reasons.append(f"Global risk-on environment ({intermarket.get('risk_on_score', 0)}/4)")
+                elif intermarket.get("risk_off"):
+                    reasons.append("Global risk-off (caution)")
+            options = indicators.get("options", {})
+            if options.get("available"):
+                if options.get("bullish_pcr"):
+                    reasons.append(f"Bullish PCR ({options.get('pcr', 0):.2f})")
+                if options.get("price_above_max_pain"):
+                    reasons.append(f"Price above max pain ({options.get('max_pain', 0):.0f})")
+            ichimoku = indicators.get("ichimoku", {})
+            if ichimoku.get("available"):
+                if ichimoku.get("above_cloud") and ichimoku.get("bullish_tk_cross"):
+                    reasons.append("Ichimoku bullish TK cross above cloud")
+                elif ichimoku.get("above_cloud"):
+                    reasons.append("Price above Ichimoku cloud")
+                elif ichimoku.get("below_cloud"):
+                    reasons.append("Price below Ichimoku cloud (caution)")
         else:
             if rsi.get("overbought"):
                 reasons.append(f"RSI overbought at {rsi.get('value', 'N/A')}")
@@ -825,6 +1095,43 @@ class ScannerService:
                     reasons.append(f"FII net sellers ({fii_dii.get('fii_net', 0):.0f} Cr)")
                 elif fii_dii.get("fii_buying"):
                     reasons.append(f"FII net buyers ({fii_dii.get('fii_net', 0):.0f} Cr)")
+            supertrend = indicators.get("supertrend", {})
+            if supertrend.get("sell_signal"):
+                reasons.append("Supertrend sell signal (flipped bearish)")
+            elif supertrend.get("bearish"):
+                reasons.append("Supertrend bearish alignment")
+            elif supertrend.get("bullish"):
+                reasons.append("Against Supertrend (bullish)")
+            obv = indicators.get("obv", {})
+            if obv.get("bearish_divergence"):
+                reasons.append("OBV bearish divergence (volume distribution ahead of price)")
+            elif obv.get("falling"):
+                reasons.append("OBV falling (distribution)")
+            cmf = indicators.get("cmf", {})
+            if cmf.get("strong_bearish"):
+                reasons.append(f"Strong selling pressure (CMF {cmf.get('value', 0):.2f})")
+            elif cmf.get("bearish"):
+                reasons.append("Negative money flow")
+            intermarket = indicators.get("intermarket", {})
+            if intermarket.get("available"):
+                if intermarket.get("risk_off"):
+                    reasons.append(f"Global risk-off environment ({intermarket.get('risk_on_score', 0)}/4)")
+                elif intermarket.get("risk_on"):
+                    reasons.append("Global risk-on (caution)")
+            options = indicators.get("options", {})
+            if options.get("available"):
+                if options.get("bearish_pcr"):
+                    reasons.append(f"Bearish PCR ({options.get('pcr', 0):.2f})")
+                if options.get("price_below_max_pain"):
+                    reasons.append(f"Price below max pain ({options.get('max_pain', 0):.0f})")
+            ichimoku = indicators.get("ichimoku", {})
+            if ichimoku.get("available"):
+                if ichimoku.get("below_cloud") and ichimoku.get("bearish_tk_cross"):
+                    reasons.append("Ichimoku bearish TK cross below cloud")
+                elif ichimoku.get("below_cloud"):
+                    reasons.append("Price below Ichimoku cloud")
+                elif ichimoku.get("above_cloud"):
+                    reasons.append("Price above Ichimoku cloud (caution)")
 
         summary = f"{signal_type} signal (confidence: {confidence:.0f}%). "
         if reasons:

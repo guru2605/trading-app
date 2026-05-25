@@ -10,8 +10,10 @@ from app.config import get_settings
 from app.deps import close_redis, get_redis
 from app.routers import (
     alerts,
+    analytics,
     audit,
     auth,
+    backtest,
     behavior,
     journal,
     orders,
@@ -26,16 +28,21 @@ from app.routers import (
 )
 from app.routers.auth import kite_callback_router
 from app.tasks.background_scanner import background_scanner_loop
+from app.tasks.outcome_tracker import outcome_tracker_loop
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     redis = await get_redis()
     scanner_task = asyncio.create_task(background_scanner_loop(redis))
+    outcome_task = asyncio.create_task(outcome_tracker_loop())
     yield
     scanner_task.cancel()
+    outcome_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await scanner_task
+    with contextlib.suppress(asyncio.CancelledError):
+        await outcome_task
     await close_redis()
 
 
@@ -61,6 +68,8 @@ def create_app() -> FastAPI:
     application.include_router(alerts.router)
     application.include_router(watchlist.router)
     application.include_router(scanner.router)
+    application.include_router(backtest.router)
+    application.include_router(analytics.router)
     application.include_router(journal.router)
     application.include_router(behavior.router)
     application.include_router(orders.router)

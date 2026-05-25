@@ -24,3 +24,7 @@ class Signal(Base):
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)  # active / executed / expired
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(20), nullable=True)  # win / loss / expired
+    actual_exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_rr: Mapped[float | None] = mapped_column(Float, nullable=True)  # actual risk:reward achieved
+    outcome_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

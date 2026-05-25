@@ -1,5 +1,6 @@
-"""NSE data service — fetches delivery volume % and FII/DII activity from NSE."""
+"""NSE data service — fetches delivery volume %, FII/DII activity, and option chains from NSE."""
 
+import asyncio
 import csv
 import io
 import logging
@@ -19,15 +20,18 @@ NSE_HEADERS: dict[str, str] = {
 
 BHAVCOPY_URL = "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{date}.csv"
 FII_DII_URL = "https://www.nseindia.com/api/fiidiiActivity"
+OPTION_CHAIN_URL = "https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
 
 
 class NseDataService:
-    """Fetches delivery volume data and FII/DII flows from NSE."""
+    """Fetches delivery volume data, FII/DII flows, and option chain from NSE."""
 
     def __init__(self) -> None:
         self._delivery_cache: dict[str, dict[str, float]] = {}
         self._fii_dii_cache: dict[str, dict[str, Any]] | None = None
         self._cache_date: str = ""
+        self._option_cache: dict[str, dict[str, Any]] = {}
+        self._option_cache_ts: dict[str, float] = {}  # symbol -> timestamp
 
     async def fetch_delivery_data(self, tradingsymbol: str) -> dict[str, Any]:
         """Fetch delivery volume percentage for a stock from NSE bhavcopy.
@@ -89,6 +93,101 @@ class NseDataService:
         except Exception:
             logger.debug("Failed to download bhavcopy from %s", url)
         return result
+
+    async def fetch_option_chain(self, tradingsymbol: str) -> dict[str, Any]:
+        """Fetch option chain data from NSE and compute PCR, max pain, and high-OI strikes.
+
+        Returns dict with pcr, max_pain, high_oi_ce, high_oi_pe, or available=False.
+        Results are cached for 5 minutes per symbol.
+        """
+        import time
+
+        now = time.time()
+        if tradingsymbol in self._option_cache:
+            cache_age = now - self._option_cache_ts.get(tradingsymbol, 0)
+            if cache_age < 300:  # 5-minute cache
+                return self._option_cache[tradingsymbol]
+
+        try:
+            url = OPTION_CHAIN_URL.format(symbol=tradingsymbol)
+            async with httpx.AsyncClient(headers=NSE_HEADERS, timeout=15.0, follow_redirects=True) as client:
+                await client.get("https://www.nseindia.com/")
+                await asyncio.sleep(1)  # rate limiting
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    return {"available": False}
+
+                data = resp.json()
+                records = data.get("records", {})
+                chain_data = records.get("data", [])
+
+                if not chain_data:
+                    return {"available": False}
+
+                underlying_price = records.get("underlyingValue", 0.0)
+
+                total_ce_oi = 0.0
+                total_pe_oi = 0.0
+                max_ce_oi = 0.0
+                max_pe_oi = 0.0
+                max_ce_strike = 0.0
+                max_pe_strike = 0.0
+                strike_pains: dict[float, float] = {}
+
+                for row in chain_data:
+                    strike = row.get("strikePrice", 0.0)
+                    ce = row.get("CE", {})
+                    pe = row.get("PE", {})
+
+                    ce_oi = float(ce.get("openInterest", 0) or 0)
+                    pe_oi = float(pe.get("openInterest", 0) or 0)
+
+                    total_ce_oi += ce_oi
+                    total_pe_oi += pe_oi
+
+                    if ce_oi > max_ce_oi:
+                        max_ce_oi = ce_oi
+                        max_ce_strike = strike
+                    if pe_oi > max_pe_oi:
+                        max_pe_oi = pe_oi
+                        max_pe_strike = strike
+
+                    # Max pain calculation: sum of (OI * intrinsic value) for each strike
+                    pain = 0.0
+                    for r in chain_data:
+                        s = r.get("strikePrice", 0.0)
+                        c_oi = float(r.get("CE", {}).get("openInterest", 0) or 0)
+                        p_oi = float(r.get("PE", {}).get("openInterest", 0) or 0)
+                        pain += c_oi * max(0, s - strike) + p_oi * max(0, strike - s)
+                    strike_pains[strike] = pain
+
+                pcr = total_pe_oi / total_ce_oi if total_ce_oi > 0 else 0.0
+
+                max_pain = 0.0
+                if strike_pains:
+                    max_pain = min(strike_pains, key=strike_pains.get)  # type: ignore[arg-type]
+
+                result: dict[str, Any] = {
+                    "available": True,
+                    "pcr": round(pcr, 2),
+                    "max_pain": max_pain,
+                    "high_oi_ce_strike": max_ce_strike,
+                    "high_oi_pe_strike": max_pe_strike,
+                    "total_ce_oi": total_ce_oi,
+                    "total_pe_oi": total_pe_oi,
+                    "underlying_price": underlying_price,
+                    "bullish_pcr": pcr > 1.5,
+                    "bearish_pcr": pcr < 0.7,
+                    "price_above_max_pain": underlying_price > max_pain if max_pain > 0 else False,
+                    "price_below_max_pain": underlying_price < max_pain if max_pain > 0 else False,
+                }
+                self._option_cache[tradingsymbol] = result
+                self._option_cache_ts[tradingsymbol] = now
+                return result
+
+        except Exception:
+            logger.debug("Failed to fetch option chain for %s", tradingsymbol)
+        return {"available": False}
 
     async def fetch_fii_dii_activity(self) -> dict[str, Any]:
         """Fetch today's FII/DII net buy/sell activity from NSE.

@@ -36,6 +36,9 @@ class ScannerConfig:
     fib_lookback: int = 50
     fib_proximity_pct: float = 1.0
     volume_trend_days: int = 3
+    supertrend_period: int = 10
+    supertrend_multiplier: float = 3.0
+    cmf_period: int = 20
 
 
 class IndicatorService:
@@ -67,6 +70,9 @@ class IndicatorService:
         result["candlestick"] = self._compute_candlestick_patterns(df)
         result["support_resistance"] = self._compute_support_resistance(df)
         result["week_52"] = self._compute_52_week(df)
+        result["supertrend"] = self._compute_supertrend(df)
+        result["obv"] = self._compute_obv(df)
+        result["cmf"] = self._compute_cmf(df)
 
         return result
 
@@ -430,6 +436,220 @@ class IndicatorService:
             "relative_strength": round(relative_strength, 2),
             "outperformer": relative_strength > 2.0,
             "underperformer": relative_strength < -2.0,
+        }
+
+    def _compute_supertrend(self, df: pd.DataFrame) -> dict[str, Any]:
+        """Compute Supertrend indicator using ATR-based trailing stop."""
+        period = self.config.supertrend_period
+        multiplier = self.config.supertrend_multiplier
+
+        if len(df) < period + 1:
+            return {"value": 0.0, "bullish": False, "bearish": False, "buy_signal": False, "sell_signal": False}
+
+        atr = ta.volatility.AverageTrueRange(
+            high=df["high"], low=df["low"], close=df["close"], window=period
+        ).average_true_range()
+
+        hl2 = (df["high"] + df["low"]) / 2
+        upper_band = hl2 + multiplier * atr
+        lower_band = hl2 - multiplier * atr
+
+        close = df["close"].values
+        upper = upper_band.values.copy()
+        lower = lower_band.values.copy()
+        direction = np.ones(len(df))  # 1 = bullish, -1 = bearish
+
+        for i in range(1, len(df)):
+            # Adjust bands based on previous close
+            if close[i - 1] > upper[i - 1]:
+                direction[i] = 1
+            elif close[i - 1] < lower[i - 1]:
+                direction[i] = -1
+            else:
+                direction[i] = direction[i - 1]
+                if direction[i] == 1 and lower[i] < lower[i - 1]:
+                    lower[i] = lower[i - 1]
+                if direction[i] == -1 and upper[i] > upper[i - 1]:
+                    upper[i] = upper[i - 1]
+
+        curr_dir = direction[-1]
+        prev_dir = direction[-2] if len(direction) >= 2 else curr_dir
+        supertrend_val = float(lower[-1]) if curr_dir == 1 else float(upper[-1])
+
+        return {
+            "value": round(supertrend_val, 2),
+            "bullish": bool(curr_dir == 1),
+            "bearish": bool(curr_dir == -1),
+            "buy_signal": bool(prev_dir == -1 and curr_dir == 1),
+            "sell_signal": bool(prev_dir == 1 and curr_dir == -1),
+        }
+
+    def _compute_obv(self, df: pd.DataFrame) -> dict[str, Any]:
+        """Compute On Balance Volume with divergence detection."""
+        obv = ta.volume.OnBalanceVolumeIndicator(close=df["close"], volume=df["volume"]).on_balance_volume()
+
+        current_obv = float(obv.iloc[-1])
+
+        # 5-bar trend comparison for divergence detection
+        lookback = min(5, len(df) - 1)
+        if lookback < 2:
+            return {
+                "value": current_obv,
+                "rising": False,
+                "falling": False,
+                "bullish_divergence": False,
+                "bearish_divergence": False,
+            }
+
+        obv_start = float(obv.iloc[-lookback - 1])
+        obv_end = float(obv.iloc[-1])
+        price_start = float(df["close"].iloc[-lookback - 1])
+        price_end = float(df["close"].iloc[-1])
+
+        obv_rising = obv_end > obv_start
+        obv_falling = obv_end < obv_start
+        price_rising = price_end > price_start
+        price_falling = price_end < price_start
+
+        # Bullish divergence: price falling but OBV rising (accumulation)
+        bullish_divergence = price_falling and obv_rising
+        # Bearish divergence: price rising but OBV falling (distribution)
+        bearish_divergence = price_rising and obv_falling
+
+        return {
+            "value": round(current_obv, 0),
+            "rising": obv_rising,
+            "falling": obv_falling,
+            "bullish_divergence": bullish_divergence,
+            "bearish_divergence": bearish_divergence,
+        }
+
+    def _compute_cmf(self, df: pd.DataFrame) -> dict[str, Any]:
+        """Compute Chaikin Money Flow indicator."""
+        cmf = ta.volume.ChaikinMoneyFlowIndicator(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            volume=df["volume"],
+            window=self.config.cmf_period,
+        ).chaikin_money_flow()
+
+        current_cmf = float(cmf.iloc[-1]) if not cmf.empty else 0.0
+
+        return {
+            "value": round(current_cmf, 4),
+            "bullish": current_cmf > 0.05,
+            "bearish": current_cmf < -0.05,
+            "strong_bullish": current_cmf > 0.15,
+            "strong_bearish": current_cmf < -0.15,
+        }
+
+    def _compute_ichimoku(self, df: pd.DataFrame) -> dict[str, Any]:
+        """Compute Ichimoku Cloud indicator. Only meaningful on daily timeframe.
+
+        Returns cloud position, TK cross signals, and trend assessment.
+        Requires at least 52 bars (Senkou Span B lookback).
+        """
+        if len(df) < 52:
+            return {"available": False}
+
+        ichimoku = ta.trend.IchimokuIndicator(
+            high=df["high"],
+            low=df["low"],
+            window1=9,  # Tenkan-sen (conversion line)
+            window2=26,  # Kijun-sen (base line)
+            window3=52,  # Senkou Span B
+        )
+
+        tenkan = ichimoku.ichimoku_conversion_line()
+        kijun = ichimoku.ichimoku_base_line()
+        span_a = ichimoku.ichimoku_a()
+        span_b = ichimoku.ichimoku_b()
+
+        current_close = float(df["close"].iloc[-1])
+        current_tenkan = float(tenkan.iloc[-1]) if not tenkan.empty else 0.0
+        current_kijun = float(kijun.iloc[-1]) if not kijun.empty else 0.0
+        current_span_a = float(span_a.iloc[-1]) if not span_a.empty else 0.0
+        current_span_b = float(span_b.iloc[-1]) if not span_b.empty else 0.0
+
+        prev_tenkan = float(tenkan.iloc[-2]) if len(tenkan) >= 2 else current_tenkan
+        prev_kijun = float(kijun.iloc[-2]) if len(kijun) >= 2 else current_kijun
+
+        cloud_top = max(current_span_a, current_span_b)
+        cloud_bottom = min(current_span_a, current_span_b)
+        above_cloud = current_close > cloud_top
+        below_cloud = current_close < cloud_bottom
+        in_cloud = not above_cloud and not below_cloud
+
+        # TK cross: Tenkan crosses above/below Kijun
+        bullish_tk_cross = prev_tenkan <= prev_kijun and current_tenkan > current_kijun
+        bearish_tk_cross = prev_tenkan >= prev_kijun and current_tenkan < current_kijun
+
+        return {
+            "available": True,
+            "tenkan": round(current_tenkan, 2),
+            "kijun": round(current_kijun, 2),
+            "span_a": round(current_span_a, 2),
+            "span_b": round(current_span_b, 2),
+            "cloud_top": round(cloud_top, 2),
+            "cloud_bottom": round(cloud_bottom, 2),
+            "above_cloud": above_cloud,
+            "below_cloud": below_cloud,
+            "in_cloud": in_cloud,
+            "bullish_tk_cross": bullish_tk_cross,
+            "bearish_tk_cross": bearish_tk_cross,
+            "bullish": above_cloud and current_tenkan > current_kijun,
+            "bearish": below_cloud and current_tenkan < current_kijun,
+        }
+
+    def _compute_orb_gap(
+        self, df: pd.DataFrame, prev_day_high: float | None, prev_day_low: float | None
+    ) -> dict[str, Any]:
+        """Compute Opening Range Breakout and Gap analysis for intraday data.
+
+        Opening range = high/low of first 2 bars (first 30 min for 15-minute data).
+        Gap = open of first bar vs previous day's high/low.
+        """
+        if len(df) < 3:
+            return {"available": False}
+
+        orb_high = float(max(df["high"].iloc[0], df["high"].iloc[1]))
+        orb_low = float(min(df["low"].iloc[0], df["low"].iloc[1]))
+        current_price = float(df["close"].iloc[-1])
+        current_volume = float(df["volume"].iloc[-1])
+        avg_volume = float(df["volume"].mean()) if len(df) > 0 else current_volume
+
+        breakout_up = current_price > orb_high
+        breakout_down = current_price < orb_low
+        volume_confirms = current_volume > avg_volume * 1.3
+
+        # Gap detection
+        gap_up = False
+        gap_down = False
+        gap_fill_possible = False
+
+        first_open = float(df["open"].iloc[0])
+        if prev_day_high is not None and prev_day_low is not None:
+            if first_open > prev_day_high:
+                gap_up = True
+                # Gap fill trade: price coming back toward previous high
+                if current_price < first_open and current_price > prev_day_high:
+                    gap_fill_possible = True
+            elif first_open < prev_day_low:
+                gap_down = True
+                if current_price > first_open and current_price < prev_day_low:
+                    gap_fill_possible = True
+
+        return {
+            "available": True,
+            "orb_high": round(orb_high, 2),
+            "orb_low": round(orb_low, 2),
+            "breakout_up": breakout_up,
+            "breakout_down": breakout_down,
+            "breakout_with_volume": (breakout_up or breakout_down) and volume_confirms,
+            "gap_up": gap_up,
+            "gap_down": gap_down,
+            "gap_fill_possible": gap_fill_possible,
         }
 
     def _compute_fibonacci(self, df: pd.DataFrame) -> dict[str, Any]:
