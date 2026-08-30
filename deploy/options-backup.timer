@@ -1,0 +1,12 @@
+# Daily capture-DB snapshot timer — TEMPLATE, pairs with options-backup.service.
+
+[Unit]
+Description=Daily capture DB snapshot at 10:20 IST on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri 10:20 Asia/Kolkata
+Persistent=true
+Unit=options-backup.service
+
+[Install]
+WantedBy=timers.target
