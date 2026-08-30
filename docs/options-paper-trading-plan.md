@@ -1,9 +1,13 @@
 # Opening-Hour Index Options Paper Trader — Plan (Rev 2)
 
-**Status:** proposed, not yet implemented. Supersedes the equity-scanner direction for new work.
+**Status:** Phases 0a + 0b **implemented and deployed** (2026-08-30); first live capture
+Mon 2026-08-31. **Resuming? Jump to §11 — the status ledger and next steps.**
+Supersedes the equity-scanner direction for new work.
 **Date:** 2026-08-30
-**Revision:** Rev 2 — rewritten after adversarial review. Rev 1 (2026-08-23) contained material
-errors; every one is listed in §8 rather than silently deleted.
+**Revision:** Rev 2.1 — Rev 2 rewritten after adversarial review; Rev 1 (2026-08-23) contained
+material errors, every one listed in §8 rather than silently deleted. Rev 2.1 folds in the
+corrections found while building Phase 0a (§2.6 arithmetic, §8) and the 2026-08-30 decisions:
+options backtest withdrawn (Phase 0c/2), login automated, all manual tasks closed.
 
 ---
 
@@ -873,13 +877,19 @@ hash is the pre-registration record (§5 control 1).
 **Gate:** lookahead assertion passes; every fill provably routes through `liquidity.py`; costs
 reconcile against the contract note; timeout rate is reported per config.
 
-### Phase 2 — Backtest as a negative filter
+### Phase 2 — ~~Options backtest~~ → Index-level signal test (revised 2026-08-30, with Phase 0c's withdrawal)
 
-Walk-forward, most recent 6 months held out untouched, gross and net side by side, deflated
-Sharpe. Configs are **eliminated**, never certified.
+The expired-options backtest is gone (§ Phase 0c). Its statistical role passes to a **hit-rate
+test on the NIFTY index itself**: does a 09:15–09:30 range break predict direction over the
+next 28 minutes? Years of index minute candles come free with the Kite Connect subscription;
+a directional hit rate has far better signal-to-noise than option P&L polluted by spread noise,
+and there is no relative-strike problem. Walk-forward, most recent 6 months held out, deflated
+for the number of configs tested. Configs are **eliminated**, never certified.
 
-**Gate:** a config survives only with net-of-cost positive expectancy *and* a deflated Sharpe
-above zero on out-of-sample windows. Expect survivors to be few or none. None is a valid result.
+**Gate:** a config's underlying signal survives only with a hit rate significantly above 50%
+out-of-sample after deflation. Expect survivors to be few or none — none is a valid result, and
+per §3.4 the literature predicts exactly that. Options-level monetisation after §2.6 costs is
+then Phase 3's question, asked only for signals that survive here.
 
 ### Phase 3 — Forward paper trading
 
@@ -900,14 +910,46 @@ result. If the known-bad config looks good live, the live pipeline is broken.
 
 Everything below is something I cannot do for you. Ordered by what blocks what.
 
-| # | Task | Blocks | Cost |
+| # | Task | Blocks | Status |
 |---|---|---|---|
-| 1 | **Kite Connect subscription.** Create an app at `developers.kite.trade`, get `api_key` + `api_secret`. Note: your existing Zerodha trading account does **not** include this | Phase 0b, Phase 3 | Rs 500/mo |
-| 2 | **Supply a real Zerodha options contract note** from any past options trade — the charges breakdown, not the P&L | `costs.py` gate in Phase 0a | free |
-| 3 | **Decide on expired-options data** (Dhan Rs 499/mo or alternative), after reading §5.2 on what is lost without it | Phase 0c, and therefore Phase 2 | Rs 499/mo |
-| 4 | **Approve the VPS reboot** (53 pending updates, restart required) | Phase 0a | free |
-| 5 | **Daily broker login.** Kite's token expires every morning (~07:30 IST). Unattended operation requires either a manual login before 09:15 each trading day, or automating TOTP — which Zerodha discourages. **This is a genuine daily commitment and the largest ongoing operational cost of the project** | Phase 3, every day | your time |
+| 1 | **Kite Connect subscription** (`developers.kite.trade`, Connect tier Rs 500/mo — the old Personal app lacks all market data) | Phase 0b, Phase 3 | ✅ done 2026-08-30; keys in `.env` (gitignored) |
+| 2 | **Supply a real Zerodha contract note** | `costs.py` gate | ✅ done 2026-08-30 — a Jun-2024 BANKNIFTY *futures* note closed the shared-machinery gate to the paisa; an *options* note would upgrade it further (placeholder test skipped) |
+| 3 | **Decide on expired-options data** | Phase 0c | ✅ resolved — withdrawn; replaced by the index-level signal test (Phase 2) |
+| 4 | **Approve the VPS reboot** | Phase 0a | ✅ done 2026-08-30 — updated, grub repaired, rebooted clean |
+| 5 | **Daily broker login** | Phase 3 | ✅ **automated 2026-08-30** — TOTP auto-login at 08:45 IST (user accepted the Zerodha-discourages trade-off; note: token expiry is 06:00 IST, not the ~07:30 Rev 2.0 stated). One-time app **Authorize** consent was clicked. Manual `/kite/login` browser flow remains as fallback |
 
-Item 5 deserves emphasis: it is the one part of this that cannot be engineered away, and it is
-worth deciding *now* whether a daily pre-market login is something you will still be doing in
-month five. If not, that changes the design before it is built, not after.
+All five are closed. The only recurring user involvement left is *watching Telegram* — ✅ at
+08:45, ▶️ at 09:15, ✔️ at ~10:00 on trading days — and acting on a ❌ (worst case: the manual
+browser login before 09:10).
+
+## 11. Status ledger — read this first when resuming (as of Sun 2026-08-30, evening)
+
+### What is live right now
+
+| Component | State |
+|---|---|
+| **VPS** | Linode 1 GB, `root@172.105.40.8`, Ubuntu 26.04, kernel 7.0.0-30, rebooted clean. Deployment: `/home/trader/trading-app` (user `trader`, venv `.venv` = py3.14 + httpx/fastapi/uvicorn/pandas). NOT a git clone — deployed via rsync from the laptop; keep in sync after every change |
+| **Timers (systemd)** | `options-autologin.timer` 08:45 IST Mon–Fri · `options-capture.timer` 09:00 IST Mon–Fri · both enabled, `Persistent=true` |
+| **Services** | `options-auth.service` (manual-login web app, 127.0.0.1:8756, always on) · `options-notify-failure@.service` (crash notifier, OnFailure hook on both units) |
+| **Auto-login** | ✅ validated live 2026-08-30: full unattended login → token stored. Idempotent re-run verified. One-time Kite app consent (Authorize) done. Failure = ❌ Telegram + manual fallback: `ssh -L 8000:127.0.0.1:8756 root@172.105.40.8` then browser `http://127.0.0.1:8000/kite/login` |
+| **Capture** | armed; first-ever live session Mon 2026-08-31 09:15–10:00 IST. Writes `data/options/capture.db` on the VPS: `chain_snapshots` (5s cadence, ATM±5, CE/PE, DTE≥5 expiries, both indices), `index_snapshots` (spot+VIX), `heartbeats` |
+| **Telegram** | ✅ live-tested to the user's phone. Bot `@guru_trading_paper_bot`, chat_id in `.env`. Silent on non-trading days |
+| **Secrets** | single `.env` at repo root (gitignored, 600, synced to VPS): KITE_API_KEY/SECRET, KITE_USER_ID/PASSWORD/TOTP_SECRET, TELEGRAM_BOT_TOKEN/CHAT_ID. Never print these; the VPS holds full-account credentials — key-only SSH |
+| **Git** | `main` @ `8a0c02f`, pushed. Remote uses the `github-guru2605` SSH alias (the machine's default key is a different GitHub account — do not "fix" the remote back) |
+| **Tests** | 609 passed, 1 skipped (intentional: options-note placeholder). Run in `/tmp/optsvenv` (py3.12) — the repo Poetry env is broken (stale lock, pre-existing) |
+
+### Next steps, in order
+
+1. **Mon 2026-08-31, after 10:05 IST — inspect the first capture.** Pull `capture.db`, compute opening-window spreads by strike/minute. This is the project's first novel measurement (§ Phase 0b gate: if spreads are 5–10× EOD figures, re-derive §2.6 economics before anything else).
+2. **Build Phase 1** (~700 LOC, no market dependency, can start any time): `engine.py`, `position.py`, `liquidity.py`, `strategies.py` (6 configs of §3.5), `metrics.py`, plus the single server-rendered progress page. Gates in § Phase 1.
+3. **Build + run the index-level signal test** (§ Phase 2 revised): fetch NIFTY minute candles via Kite historical API (included in the Rs 500/mo plan), hit-rate test of the 09:15–09:30 range break over the next 28 minutes, walk-forward, deflated. This is the project's statistical backbone now that the options backtest is withdrawn.
+4. **After ~10 capture sessions (~mid-Sep):** calibrate `liquidity.py` against measured spreads; pass/fail the Phase 0b gate; fix the poetry.lock so the repo env works (currently everything verifies in the scratch venv).
+5. **Then Phase 3:** paper trading live on the capture feed — only for configs whose underlying signal survived step 3, plus one rejected config as the pipeline control.
+
+### Standing decisions (do not re-litigate without new information)
+
+- Paper only, forever — no order-placement code path may exist; a permanent audit test enforces it; the `kiteconnect` SDK is banned from `app/options/` (raw httpx only).
+- Historical expired-options backtest: withdrawn. Statistical power comes from the index-level test.
+- NIFTY + BANKNIFTY only; window 09:15–10:00 (enter AND exit); never expiry day; DTE ≥ 5.
+- First ~2 weeks are capture-only by design — no P&L before the fill model is calibrated on measured spreads.
+- §5.2 arithmetic stands: six months of forward paper cannot confirm an edge; its jobs are infrastructure validation and rejecting large negative expectancy.
