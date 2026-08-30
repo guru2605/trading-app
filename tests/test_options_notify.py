@@ -29,6 +29,7 @@ from app.options.notify import (
     main,
     probe_chat_id,
     send,
+    send_document,
 )
 from tests.test_options_capture import FORBIDDEN_SOURCE_STRINGS
 
@@ -169,6 +170,81 @@ def test_generic_exception_carrying_the_token_is_redacted(telegram_env: None, tm
     with _client(handler) as client:
         assert send("hello", heartbeat_db=heartbeat_db, client=client) is False
     assert FAKE_TOKEN not in _heartbeats(heartbeat_db)[0][1]
+
+
+# ── Document upload (daily offsite archive) ─────────────────────────────────────────────
+
+
+def test_send_document_posts_multipart_with_caption(telegram_env: None, tmp_path: Path) -> None:
+    payload = b"gzip-bytes-here"
+    doc = tmp_path / "day-20260831.db.gz"
+    doc.write_bytes(payload)
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/bot{FAKE_TOKEN}/sendDocument"
+        body = request.read()
+        seen["has_file"] = payload in body
+        seen["has_name"] = b"day-20260831.db.gz" in body
+        seen["has_chat"] = FAKE_CHAT_ID.encode() in body
+        seen["has_caption"] = "📦 Capture 2026-08-31".encode() in body
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 2}})
+
+    with _client(handler) as client:
+        assert send_document(doc, caption="📦 Capture 2026-08-31: 5 rows", client=client) is True
+    assert seen == {"has_file": True, "has_name": True, "has_chat": True, "has_caption": True}
+
+
+def test_send_document_unconfigured_is_a_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(ENV_BOT_TOKEN, raising=False)
+    monkeypatch.delenv(ENV_CHAT_ID, raising=False)
+    doc = tmp_path / "day.db.gz"
+    doc.write_bytes(b"x")
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — must not be reached
+        raise AssertionError("no request may leave when unconfigured")
+
+    with _client(handler) as client:
+        assert send_document(doc, client=client) is False
+
+
+def test_send_document_missing_file_records_a_redacted_heartbeat(telegram_env: None, tmp_path: Path) -> None:
+    heartbeat_db = tmp_path / "capture.db"
+    with _client(lambda request: httpx.Response(200, json={"ok": True})) as client:
+        assert send_document(tmp_path / "absent.gz", heartbeat_db=heartbeat_db, client=client) is False
+    events = _heartbeats(heartbeat_db)
+    assert len(events) == 1 and events[0][0] == "notify_error"
+    assert FAKE_TOKEN not in events[0][1]
+
+
+def test_send_document_refuses_files_over_the_bot_cap_without_a_request(
+    telegram_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doc = tmp_path / "huge.db.gz"
+    doc.write_bytes(b"x")
+    monkeypatch.setattr(notify, "DOCUMENT_MAX_BYTES", 0)
+    heartbeat_db = tmp_path / "capture.db"
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — must not be reached
+        raise AssertionError("oversized upload must be refused locally")
+
+    with _client(handler) as client:
+        assert send_document(doc, heartbeat_db=heartbeat_db, client=client) is False
+    assert "50 MB" in _heartbeats(heartbeat_db)[0][1]
+
+
+def test_send_document_network_error_never_raises_and_redacts(telegram_env: None, tmp_path: Path) -> None:
+    doc = tmp_path / "day.db.gz"
+    doc.write_bytes(b"x")
+    heartbeat_db = tmp_path / "capture.db"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+
+    with _client(handler) as client:
+        assert send_document(doc, heartbeat_db=heartbeat_db, client=client) is False
+    detail = _heartbeats(heartbeat_db)[0][1]
+    assert FAKE_TOKEN not in detail and REDACTION_MARKER in detail
 
 
 # ── chat_id probe ────────────────────────────────────────────────────────────────────────

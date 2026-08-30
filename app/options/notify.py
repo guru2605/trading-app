@@ -143,6 +143,64 @@ def send(text: str, *, heartbeat_db: Path | None = None, client: httpx.Client | 
             active.close()
 
 
+#: Telegram's hard cap for bot file uploads. Anything larger is rejected server-side, so we
+#: fail fast locally instead of shipping 50 MB over the wire to learn that.
+DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
+
+
+def send_document(
+    path: Path, caption: str | None = None, *, heartbeat_db: Path | None = None, client: httpx.Client | None = None
+) -> bool:
+    """Upload a file to the configured Telegram chat. Same contract as :func:`send`:
+    inert when unconfigured, best-effort, NEVER raises, token never leaks.
+
+    Used by deploy/backup_capture.py to ship each day's capture rows to the chat — an
+    append-only offsite archive that never approaches Telegram's 50 MB per-file cap
+    because each file holds one day, not the whole database.
+    """
+    token = _credential(ENV_BOT_TOKEN)
+    chat_id = _credential(ENV_CHAT_ID)
+    if not token or not chat_id:
+        logger.debug(
+            "telegram notify not configured (%s/%s not both set); document dropped", ENV_BOT_TOKEN, ENV_CHAT_ID
+        )
+        return False
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        _record_failure(heartbeat_db, _redact(f"sendDocument stat {type(exc).__name__}: {exc}", token))
+        return False
+    if size > DOCUMENT_MAX_BYTES:
+        _record_failure(heartbeat_db, f"sendDocument refused: {path.name} is {size} bytes, over the 50 MB bot cap")
+        return False
+    own_client = client is None
+    active = client or httpx.Client(timeout=NOTIFY_TIMEOUT_SECONDS * 6)  # uploads are slower than texts
+    try:
+        data: dict[str, str] = {"chat_id": chat_id}
+        if caption:
+            data["caption"] = caption
+        with open(path, "rb") as fh:
+            response = active.post(
+                f"{TELEGRAM_API_BASE}/bot{token}/sendDocument",
+                data=data,
+                files={"document": (path.name, fh, "application/octet-stream")},
+            )
+        body: Any = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        if response.status_code != 200 or body.get("ok") is not True:
+            _record_failure(
+                heartbeat_db,
+                f"sendDocument HTTP {response.status_code}, description={body.get('description', 'n/a')}",
+            )
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001 — deliberate: a notification must never break the caller
+        _record_failure(heartbeat_db, _redact(f"sendDocument {type(exc).__name__}: {exc}", token))
+        return False
+    finally:
+        if own_client:
+            active.close()
+
+
 # ── One-time setup: find your chat_id ────────────────────────────────────────────────────
 
 
