@@ -1,0 +1,37 @@
+# Phase 0b capture service — TEMPLATE, not installed by anything in this repo.
+# Copy to /etc/systemd/system/options-capture.service on the Linode and edit the
+# three paths marked EDITME. Pair with options-capture.timer (same directory).
+#
+# CAPTURE ONLY: app.options.capture reads quotes and writes SQLite. It cannot place orders.
+#
+# The process handles its own session logic: it exits immediately on NSE holidays/weekends
+# (calendar.is_trading_day — holiday gate only, NOT the DTE>=5 trading rule, so expiry days
+# ARE captured), sleeps until 09:15 IST, snapshots until 10:00, and is gone by 10:05
+# (CAPTURE_HARD_STOP in app/options/capture.py). RuntimeMaxSec below is only a backstop.
+
+[Unit]
+Description=NSE option-chain capture 09:15-10:00 IST (paper-trading data capture only)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# EDITME: unix user that owns the checkout
+User=trader
+# EDITME: repo checkout
+WorkingDirectory=/home/trader/trading-app
+# EDITME: .env at the repo root must define KITE_API_KEY and KITE_API_SECRET.
+# systemd loads it into the environment; nothing in the code ever logs the secret.
+EnvironmentFile=/home/trader/trading-app/.env
+ExecStart=/home/trader/trading-app/.venv/bin/python -m app.options.capture --db data/options/capture.db
+# Backstop only — the process exits by 10:05 IST on its own. 09:00 start + 4800s = 10:20 IST.
+RuntimeMaxSec=4800
+# 1 GB Linode: keep the capture from ever OOM-wrestling the box.
+MemoryMax=256M
+Nice=5
+# Journald keeps stdout; heartbeats also land in the capture DB (loophole #15).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+# Phase 0b capture timer — TEMPLATE, not installed by anything in this repo.
+# Copy to /etc/systemd/system/options-capture.timer alongside options-capture.service.
+#
+# Fires 09:00 IST Mon-Fri. The timezone suffix in OnCalendar makes this correct even though
+# the Linode's system clock should be (and stay) UTC. The service itself skips NSE holidays
+# via calendar.is_trading_day, so the timer only needs the weekday filter.
+
+[Unit]
+Description=Start NSE option-chain capture at 09:00 IST on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri 09:00 Asia/Kolkata
+# If the box was rebooting at 09:00, still start the capture when it comes back (the process
+# itself gives up for the day once past the window).
+Persistent=true
+Unit=options-capture.service
+
+[Install]
+WantedBy=timers.target

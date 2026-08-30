@@ -1,0 +1,20 @@
+# Kite auto-login timer — TEMPLATE, not installed by anything in this repo.
+# Copy to /etc/systemd/system/options-autologin.timer alongside options-autologin.service.
+#
+# Fires 08:45 IST Mon-Fri: safely after the 06:00 IST token flush and comfortably before
+# the 09:00 capture timer, so a failure leaves time for the manual /kite/login fallback
+# before the 09:15 window. The timezone suffix keeps this correct on a UTC system clock.
+# No holiday logic needed: logging in on an NSE holiday is harmless (capture skips itself).
+
+[Unit]
+Description=Kite unattended login at 08:45 IST on weekdays (before the 09:00 capture)
+
+[Timer]
+OnCalendar=Mon..Fri 08:45 Asia/Kolkata
+# If the box was rebooting at 08:45, still run the login when it comes back (the process
+# is idempotent: a token that is already fresh makes it exit 0 without touching Kite).
+Persistent=true
+Unit=options-autologin.service
+
+[Install]
+WantedBy=timers.target

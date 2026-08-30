@@ -1,0 +1,42 @@
+# Kite auto-login service — TEMPLATE, not installed by anything in this repo.
+# Copy to /etc/systemd/system/options-autologin.service on the Linode and edit the
+# three paths marked EDITME. Pair with options-autologin.timer (same directory).
+#
+# CAPTURE ONLY, OPT-IN: app.options.autologin performs the Zerodha web login + TOTP and
+# stores the day's access token via broker.py's existing exchange path. It cannot place
+# orders. It is INERT (exits 0 with one line) until KITE_USER_ID / KITE_PASSWORD /
+# KITE_TOTP_SECRET are added to the .env — and note that Zerodha discourages automated
+# login; the manual /kite/login flow (RUNBOOK-capture.md) remains the fallback.
+#
+# Idempotent: if the stored token is already fresh it exits 0 without touching Kite.
+# Failures exit non-zero with one terse category (login rejected / twofa rejected /
+# no request_token / exchange failed) in the journal, plus an autologin_* heartbeat row
+# in the capture DB.
+
+[Unit]
+Description=Kite Connect unattended daily login 08:45 IST (paper-trading capture only)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# EDITME: unix user that owns the checkout
+User=trader
+# EDITME: repo checkout
+WorkingDirectory=/home/trader/trading-app
+# EDITME: .env at the repo root. With auto-login enabled it holds FULL ACCOUNT
+# CREDENTIALS — chmod 600, owned by the user above; key-only SSH on the box.
+# Nothing in the code ever logs the password, the TOTP seed or a generated code.
+EnvironmentFile=/home/trader/trading-app/.env
+ExecStart=/home/trader/trading-app/.venv/bin/python -m app.options.autologin
+# Backstop only — the whole sequence is four HTTP round-trips.
+RuntimeMaxSec=300
+# 1 GB Linode: same containment as the capture unit.
+MemoryMax=128M
+Nice=5
+# Journald keeps stdout/stderr; the outcome also lands as an autologin_* heartbeat row.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
