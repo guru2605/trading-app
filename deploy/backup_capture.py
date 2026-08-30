@@ -8,15 +8,19 @@ Run by deploy/options-backup.timer at 10:20 IST Mon-Fri, after the capture windo
 """
 
 import gzip
+import shutil
 import sqlite3
 import sys
-import time
 from datetime import date
 from pathlib import Path
 
 SRC = Path("data/options/capture.db")
 BACKUP_DIR = Path("backups")
-KEEP_DAYS = 60
+# Full snapshots each contain all history, so old generations are redundant; a handful
+# guards against a corrupt latest copy. 60 generations of a linearly growing DB would
+# consume the disk quadratically — offsite copies are the disaster layer, not this.
+KEEP_COUNT = 7
+DISK_WARN_FRACTION = 0.15  # warn to Telegram when free space drops below 15%
 
 
 def main() -> int:
@@ -42,14 +46,29 @@ def main() -> int:
             f_out.write(chunk)
     tmp.unlink()
 
-    cutoff = time.time() - KEEP_DAYS * 86400
+    snapshots = sorted(BACKUP_DIR.glob("capture-*.db.gz"))
     pruned = 0
-    for old in BACKUP_DIR.glob("capture-*.db.gz"):
-        if old.stat().st_mtime < cutoff:
-            old.unlink()
-            pruned += 1
+    for old in snapshots[:-KEEP_COUNT]:
+        old.unlink()
+        pruned += 1
 
-    print(f"backup ok: {dst} ({dst.stat().st_size} bytes), pruned {pruned}")
+    usage = shutil.disk_usage("/")
+    free_frac = usage.free / usage.total
+    print(
+        f"backup ok: {dst} ({dst.stat().st_size} bytes), pruned {pruned}, "
+        f"disk free {free_frac:.0%}"
+    )
+    if free_frac < DISK_WARN_FRACTION:
+        try:
+            from app.options.notify import send
+
+            send(
+                f"⚠️ VPS disk low: {free_frac:.0%} free "
+                f"({usage.free // 2**30} GiB of {usage.total // 2**30} GiB). "
+                "Capture keeps running, but act soon."
+            )
+        except Exception:
+            pass  # the warning is best-effort; the backup itself succeeded
     return 0
 
 
