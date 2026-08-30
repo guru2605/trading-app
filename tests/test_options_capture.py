@@ -305,7 +305,7 @@ def test_no_order_write_api_is_referenced() -> None:
     assert sources, f"expected package sources under {package_dir}"
     # Every broker-touching module must be in the sweep — a rename must fail here, loudly.
     names = {source.name for source in sources}
-    assert {"broker.py", "capture.py", "autologin.py"} <= names, f"audit sweep is missing files: {names}"
+    assert {"broker.py", "capture.py", "autologin.py", "notify.py"} <= names, f"audit sweep is missing files: {names}"
     for source in sources:
         text = source.read_text()
         for forbidden in FORBIDDEN_SOURCE_STRINGS:

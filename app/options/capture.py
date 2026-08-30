@@ -40,6 +40,7 @@ from pathlib import Path
 
 import httpx
 
+from app.options import notify
 from app.options.broker import (
     KITE_API_BASE,
     KITE_VERSION_HEADER,
@@ -270,6 +271,13 @@ def snapshot_rows(
     return rows
 
 
+def _expiry_summary(expiries: dict[Index, list[date]]) -> str:
+    """One line of the day's captured expiries per index, for the start notification."""
+    return "; ".join(
+        f"{index.value} {', '.join(e.isoformat() for e in expiries[index]) or 'none'}" for index in CAPTURED_INDICES
+    )
+
+
 def should_capture(on: date) -> bool:
     """Capture on every NSE trading day — holiday/weekend gate ONLY.
 
@@ -340,12 +348,14 @@ async def run_capture(db: Path = DEFAULT_CAPTURE_DB, token_db: Path | None = Non
     hard_stop = datetime.combine(today, CAPTURE_HARD_STOP, tzinfo=IST)
 
     cycles = 0
+    chain_rows = 0
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, headers=_auth_headers(token)) as client:
         await _sleep_until(open_dt)
         _heartbeat(conn, "start", f"window {WINDOW_OPEN}-{WINDOW_CLOSE}")
 
         instruments = await fetch_instrument_dump(client)
         expiries = {index: eligible_expiries(index, today) for index in CAPTURED_INDICES}
+        notify.send(f"▶️ Capture started {today.isoformat()}, expiries: {_expiry_summary(expiries)}", heartbeat_db=db)
         spot_keys = [SPOT_KEYS[index] for index in CAPTURED_INDICES] + [VIX_KEY]
         meta_by_key: dict[str, InstrumentMeta] = {}
 
@@ -375,11 +385,13 @@ async def run_capture(db: Path = DEFAULT_CAPTURE_DB, token_db: Path | None = Non
                 )
                 if meta_by_key:
                     chain_quotes = await fetch_quotes(client, list(meta_by_key))
+                    rows = snapshot_rows(cycle_started, chain_quotes, meta_by_key)
                     conn.executemany(
                         "INSERT INTO chain_snapshots (ts, index_name, expiry, strike, opt_type, bid, ask,"
                         " bid_qty, ask_qty, ltp, volume, oi, feed_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        snapshot_rows(cycle_started, chain_quotes, meta_by_key),
+                        rows,
                     )
+                    chain_rows += len(rows)
                 conn.commit()
                 cycles += 1
             except (httpx.HTTPError, sqlite3.Error, ValueError) as exc:  # keep capturing; log it
@@ -387,6 +399,11 @@ async def run_capture(db: Path = DEFAULT_CAPTURE_DB, token_db: Path | None = Non
             await _sleep_until(cycle_started + timedelta(seconds=SNAPSHOT_INTERVAL_SECONDS))
 
     _heartbeat(conn, "end", f"{cycles} cycles")
+    notify.send(
+        f"✔️ Capture done: {cycles} cycles, {chain_rows} rows, "
+        f"{'/'.join(index.value for index in CAPTURED_INDICES)}, window {WINDOW_OPEN:%H:%M}–{WINDOW_CLOSE:%H:%M}",
+        heartbeat_db=db,
+    )
     conn.close()
     return cycles
 
@@ -403,7 +420,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
-    cycles = asyncio.run(run_capture(db=args.db, token_db=args.token_db))
+    try:
+        cycles = asyncio.run(run_capture(db=args.db, token_db=args.token_db))
+    except Exception as exc:
+        # Best-effort push before the crash surfaces in journald; the unit's OnFailure=
+        # notifier is the backstop for deaths this line cannot see (OOM kill, SIGKILL).
+        reason = f"{type(exc).__name__}: {exc}"
+        notify.send(f"❌ Capture failed: {reason[:300]}", heartbeat_db=args.db)
+        raise
     print(f"capture finished: {cycles} cycles -> {args.db}")
     return 0
 

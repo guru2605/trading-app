@@ -13,6 +13,9 @@
 Description=NSE option-chain capture 09:15-10:00 IST (paper-trading data capture only)
 Wants=network-online.target
 After=network-online.target
+# Telegram push on hard crashes (OOM kill etc.) that in-process notification cannot report.
+# Inert unless TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are in the .env (RUNBOOK-capture.md).
+OnFailure=options-notify-failure@%n.service
 
 [Service]
 Type=oneshot

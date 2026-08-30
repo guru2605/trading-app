@@ -62,6 +62,7 @@ from typing import Any
 
 import httpx
 
+from app.options import notify
 from app.options.broker import (
     REQUEST_TIMEOUT_SECONDS,
     StoredToken,
@@ -304,10 +305,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         stored = asyncio.run(perform_autologin(token_db=args.token_db))
     except AutoLoginError as exc:
         write_heartbeat(args.db, "autologin_error", str(exc))
+        notify.send(
+            f"❌ Kite auto-login failed: {exc.category} — manual fallback: /kite/login before 09:10",
+            heartbeat_db=args.db,
+        )
         print(f"kite auto-login failed: {exc.category}", file=sys.stderr)
         return exc.exit_code
     detail = f"token stored, expires {stored.expires_at.isoformat()}"
     write_heartbeat(args.db, "autologin_ok", detail)
+    notify.send(f"✅ Kite login OK, token valid till {stored.expires_at.strftime('%H:%M')}", heartbeat_db=args.db)
     print(f"kite auto-login ok: {detail}")
     return 0
 

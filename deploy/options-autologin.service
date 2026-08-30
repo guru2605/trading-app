@@ -17,6 +17,9 @@
 Description=Kite Connect unattended daily login 08:45 IST (paper-trading capture only)
 Wants=network-online.target
 After=network-online.target
+# Telegram push on hard crashes; the process also notifies its four soft-failure
+# categories itself. Inert unless TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are in the .env.
+OnFailure=options-notify-failure@%n.service
 
 [Service]
 Type=oneshot

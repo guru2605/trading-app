@@ -1,0 +1,31 @@
+# Crash-notification template unit — TEMPLATE, not installed by anything in this repo.
+# Copy to /etc/systemd/system/options-notify-failure@.service and edit the EDITME paths.
+#
+# Activated via OnFailure=options-notify-failure@%n.service in options-capture.service and
+# options-autologin.service: %n expands to the failed unit's name, which arrives here as %i.
+# It exists for the deaths in-process notification cannot report — OOM kill, SIGKILL, a
+# python that never started. Sends "❌ <unit> crashed — check journalctl" via
+# app.options.notify (Telegram Bot API only; no broker endpoint; capture-only audit applies).
+#
+# Best-effort by design: the CLI's --failure mode always exits 0, and notify.send never
+# raises, so an unconfigured or unreachable Telegram cannot add a second failed unit.
+# No [Install] section — this unit is only ever started by OnFailure=, never enabled.
+
+[Unit]
+Description=Telegram crash notification for %i
+
+[Service]
+Type=oneshot
+# EDITME: unix user that owns the checkout
+User=trader
+# EDITME: repo checkout
+WorkingDirectory=/home/trader/trading-app
+# EDITME: .env at the repo root (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID; chmod 600).
+# Nothing in the code ever logs the bot token — it is redacted even out of httpx errors.
+EnvironmentFile=/home/trader/trading-app/.env
+ExecStart=/home/trader/trading-app/.venv/bin/python -m app.options.notify --failure %i
+RuntimeMaxSec=60
+MemoryMax=128M
+Nice=5
+StandardOutput=journal
+StandardError=journal

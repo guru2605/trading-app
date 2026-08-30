@@ -105,6 +105,39 @@ stored token is already fresh it exits 0 without touching Kite).
 - Morning check: `journalctl -u options-autologin.service --since today` and the
   heartbeats query below (expect an `autologin_ok` or `autologin_skipped` row).
 
+## Telegram notifications (opt-in)
+
+`app/options/notify.py` pushes daily status to your phone — auto-login outcome, capture
+start/done summaries, crash alerts — so no morning SSH is needed just to know the pipeline
+is alive. Best-effort by design: it never raises into auto-login or capture, and it is
+inert (a no-op returning False) until both variables below are set.
+
+1. Create a bot: message **@BotFather** on Telegram → `/newbot` → copy the token.
+2. Message your new bot anything from your phone (it cannot message you first).
+3. Find your chat id and finish the `.env` (600 perms — the token lets anyone message as
+   the bot):
+
+   ```
+   TELEGRAM_BOT_TOKEN=123456:...   # add this first, then run the probe
+   .venv/bin/python -m app.options.notify --chat-id-probe   # prints chat_id=... first_name=...
+   TELEGRAM_CHAT_ID=...            # the printed chat_id
+   ```
+
+4. Test: `.venv/bin/python -m app.options.notify "hello from the linode"` (exit 0 = sent).
+5. Crash backstop: install the template unit so OnFailure= in the capture/auto-login units
+   resolves (it catches OOM kills that in-process notification cannot report):
+
+   ```
+   sudo cp deploy/options-notify-failure@.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   ```
+
+What arrives when: `✅ Kite login OK...` / `❌ Kite auto-login failed: <category>...` at
+08:45; `▶️ Capture started...` at 09:15 and `✔️ Capture done: N cycles, M rows...` after
+10:00; `❌ <unit> crashed — check journalctl` on a hard crash. Silence on non-trading days
+and on the idempotent auto-login skip is deliberate. Send failures land as `notify_error`
+heartbeat rows; the bot token is redacted out of every log line and heartbeat.
+
 ## What runs when
 
 - If enabled, the auto-login timer fires **08:45 IST Mon–Fri** and refreshes the token
