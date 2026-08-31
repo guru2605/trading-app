@@ -9,6 +9,9 @@ OnFailure=options-notify-failure@%n.service
 Type=oneshot
 User=trader
 WorkingDirectory=/home/trader/trading-app
+# Needed for the Telegram day-file upload and low-disk warning; omitting this silently
+# disables both (found the hard way on the first live run, 2026-08-31).
+EnvironmentFile=/home/trader/trading-app/.env
 ExecStart=/home/trader/trading-app/.venv/bin/python deploy/backup_capture.py
 Nice=10
 
