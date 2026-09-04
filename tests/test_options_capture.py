@@ -235,6 +235,24 @@ def test_snapshot_rows_store_an_empty_book_as_null_not_zero() -> None:
     assert row[6] is None and row[8] is None  # missing ask depth -> NULL
 
 
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "1970-01-01 05:30:00",  # Kite's rendering of epoch zero in IST — seen live 2026-09-03
+        "1970-01-01 00:00:00",
+        "",
+        None,
+    ],
+)
+def test_snapshot_rows_store_an_unusable_feed_timestamp_as_null(timestamp: str | None) -> None:
+    # An absent exchange timestamp arrives as epoch zero or as nothing at all. Kept verbatim it
+    # reads as a 20-year-stale quote and wrecks any average over feed_ts; NULL is the truth.
+    ts = datetime(2026, 8, 28, 9, 20, 5, tzinfo=IST)
+    quotes = {"NFO:NIFTYTEST24800CE": {"last_price": 145.9, "timestamp": timestamp, "depth": {}}}
+    (row,) = snapshot_rows(ts, quotes, {"NFO:NIFTYTEST24800CE": _meta()})
+    assert row[12] is None
+
+
 def test_snapshot_rows_skip_instruments_absent_from_the_response() -> None:
     ts = datetime(2026, 8, 28, 9, 15, 1, tzinfo=IST)
     assert snapshot_rows(ts, {}, {"NFO:NIFTYTEST24800CE": _meta()}) == []

@@ -238,11 +238,34 @@ def _depth_level(quote: dict, side: str) -> tuple[float | None, int | None]:  # 
     return float(price), int(quantity)
 
 
+#: Any feed timestamp older than this is not a real quote time — Kite renders a missing
+#: exchange timestamp as epoch zero ("1970-01-01 05:30:00" in IST). Stored verbatim it looks
+#: like a 20-year-stale quote and destroys any average over feed_ts, so it becomes NULL.
+FEED_TS_FLOOR = "2000-01-01"
+
+
+def _feed_ts(quote: dict) -> str | None:  # type: ignore[type-arg]
+    """Exchange quote timestamp, or NULL when the feed did not supply a usable one.
+
+    Absent ("" / None) and epoch-zero timestamps both mean "unknown"; only NULL says that
+    honestly. Compared as text, which is safe for Kite's zero-padded 'YYYY-MM-DD HH:MM:SS'.
+    """
+    raw = quote.get("timestamp")
+    if not raw:
+        return None
+    value = str(raw).strip()
+    if not value or value < FEED_TS_FLOOR:
+        return None
+    return value
+
+
 def snapshot_rows(
     ts: datetime,
     quotes: dict[str, dict],  # type: ignore[type-arg]
     meta_by_key: dict[str, InstrumentMeta],
-) -> list[tuple[str, str, str, int, str, float | None, float | None, int | None, int | None, float, int, int, str]]:
+) -> list[
+    tuple[str, str, str, int, str, float | None, float | None, int | None, int | None, float, int, int, str | None]
+]:
     """Flatten a Kite /quote payload into chain_snapshots rows. Pure; unit-tested."""
     rows = []
     for key, meta in meta_by_key.items():
@@ -265,7 +288,7 @@ def snapshot_rows(
                 float(quote.get("last_price", 0.0)),
                 int(quote.get("volume", 0)),
                 int(quote.get("oi", 0)),
-                str(quote.get("timestamp", "")),
+                _feed_ts(quote),
             )
         )
     return rows
@@ -378,7 +401,7 @@ async def run_capture(db: Path = DEFAULT_CAPTURE_DB, token_db: Path | None = Non
                             cycle_started.isoformat(),
                             key,
                             float(spot_quotes.get(key, {}).get("last_price", 0.0)),
-                            str(spot_quotes.get(key, {}).get("timestamp", "")),
+                            _feed_ts(spot_quotes.get(key, {})),
                         )
                         for key in spot_keys
                     ],
