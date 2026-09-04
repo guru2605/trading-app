@@ -922,7 +922,7 @@ All five are closed. The only recurring user involvement left is *watching Teleg
 08:45, ▶️ at 09:15, ✔️ at ~10:00 on trading days — and acting on a ❌ (worst case: the manual
 browser login before 09:10).
 
-## 11. Status ledger — read this first when resuming (as of Sun 2026-08-30, evening)
+## 11. Status ledger — read this first when resuming (as of Fri 2026-09-04, post-session)
 
 ### What is live right now
 
@@ -932,18 +932,49 @@ browser login before 09:10).
 | **Timers (systemd)** | `options-autologin.timer` 08:45 IST Mon–Fri · `options-capture.timer` 09:00 IST Mon–Fri · both enabled, `Persistent=true` |
 | **Services** | `options-auth.service` (manual-login web app, 127.0.0.1:8756, always on) · `options-notify-failure@.service` (crash notifier, OnFailure hook on both units) |
 | **Auto-login** | ✅ validated live 2026-08-30: full unattended login → token stored. Idempotent re-run verified. One-time Kite app consent (Authorize) done. Failure = ❌ Telegram + manual fallback: `ssh -L 8000:127.0.0.1:8756 root@172.105.40.8` then browser `http://127.0.0.1:8000/kite/login` |
-| **Capture** | armed; first-ever live session Mon 2026-08-31 09:15–10:00 IST. Writes `data/options/capture.db` on the VPS: `chain_snapshots` (5s cadence, ATM±5, CE/PE, DTE≥5 expiries, both indices), `index_snapshots` (spot+VIX), `heartbeats` |
+| **Capture** | ✅ running. **5 of 10 gate sessions done** (31 Aug – 4 Sep), every one a full 09:15:0x–09:59:5x window, ~53k chain + ~1.6k index rows/session. Writes `data/options/capture.db` on the VPS: `chain_snapshots` (5s cadence, ATM±5, CE/PE, DTE≥5 expiries, both indices), `index_snapshots` (spot+VIX), `heartbeats`. DB 54 MB ≈ 11 MB/session |
+| **Backup** | ✅ `options-backup.timer` 10:20 IST: 7 local gzip snapshots + per-day file to Telegram (needs `EnvironmentFile=`, see the unit's comment). Disk 19% used of 25 GB |
 | **Telegram** | ✅ live-tested to the user's phone. Bot `@guru_trading_paper_bot`, chat_id in `.env`. Silent on non-trading days |
 | **Secrets** | single `.env` at repo root (gitignored, 600, synced to VPS): KITE_API_KEY/SECRET, KITE_USER_ID/PASSWORD/TOTP_SECRET, TELEGRAM_BOT_TOKEN/CHAT_ID. Never print these; the VPS holds full-account credentials — key-only SSH |
 | **Git** | `main` @ `8a0c02f`, pushed. Remote uses the `github-guru2605` SSH alias (the machine's default key is a different GitHub account — do not "fix" the remote back) |
 | **Tests** | 609 passed, 1 skipped (intentional: options-note placeholder). Run in `/tmp/optsvenv` (py3.12) — the repo Poetry env is broken (stale lock, pre-existing) |
 
+### Phase 0b interim result (5 of 10 sessions, 31 Aug – 4 Sep 2026)
+
+The gate asks whether opening-window spreads are within the same order as §1.2's EOD figures.
+Five sessions in, the answer is a clear yes, and the measurement is remarkably stable:
+
+| Session | NIFTY ATM spread | BANKNIFTY ATM spread |
+|---|---|---|
+| 2026-08-31 | 0.41 pts (0.27% of mid) | 2.16 pts (0.28%) |
+| 2026-09-01 | 0.37 (0.27%) | 2.06 (0.27%) |
+| 2026-09-02 | 0.31 (0.21%) | 2.37 (0.29%) |
+| 2026-09-03 | 0.21 (0.18%) | 1.74 (0.25%) |
+| 2026-09-04 | 0.47 (0.27%) | 1.92 (0.27%) |
+
+ATM±100 (NIFTY) / ±200 (BANKNIFTY) on the nearest captured expiry, from 09:16 IST. Findings:
+
+- **~0.27% of mid, both indices, every session.** Half-spread ~0.13% per side is small against
+  the 0.735% one-way cost load in §2.6, so those economics look likely to survive the gate.
+- **The open dislocation is ~10 seconds, not minutes.** Day 1: NIFTY ATM 35.8 pts (23%) at
+  09:15:01, 1.3 pts at :06, ~0.4 pts thereafter. §2.4's 09:20 entry delay is amply conservative.
+- **Quote coverage in the ATM band is 100.0%** every session; 95–99.8% across the whole captured
+  chain. §2.5's no-quote failure branch is rare where we would actually trade.
+- **Staleness is a non-issue in the ATM band: max 2s** against §2.7's 60s gate. Larger values
+  (up to ~15 min) occur only on untraded far strikes carrying no bid and no ask.
+- One data bug found and fixed 2026-09-04: Kite renders a missing exchange timestamp as epoch
+  zero, stored verbatim as `1970-01-01 05:30:00`. A single such row on 09-03 dragged that day's
+  mean staleness to 32,937s. `_feed_ts` now writes NULL. **The one historical row is deliberately
+  left as captured** — the offsite Telegram archive is immutable and must not diverge; exclude
+  `feed_ts < '2000-01-01'` when analysing.
+
 ### Next steps, in order
 
-1. **Mon 2026-08-31, after 10:05 IST — inspect the first capture.** Pull `capture.db`, compute opening-window spreads by strike/minute. This is the project's first novel measurement (§ Phase 0b gate: if spreads are 5–10× EOD figures, re-derive §2.6 economics before anything else).
+1. **Fri 2026-09-11 — the 10th session closes the Phase 0b gate** (Mon 14 Sep is Ganesh
+   Chaturthi). Nothing to do until then but watch Telegram; the trend above is already stable.
 2. **Build Phase 1** (~700 LOC, no market dependency, can start any time): `engine.py`, `position.py`, `liquidity.py`, `strategies.py` (6 configs of §3.5), `metrics.py`, plus the single server-rendered progress page. Gates in § Phase 1.
 3. **Build + run the index-level signal test** (§ Phase 2 revised): fetch NIFTY minute candles via Kite historical API (included in the Rs 500/mo plan), hit-rate test of the 09:15–09:30 range break over the next 28 minutes, walk-forward, deflated. This is the project's statistical backbone now that the options backtest is withdrawn.
-4. **After ~10 capture sessions (~mid-Sep):** calibrate `liquidity.py` against measured spreads; pass/fail the Phase 0b gate; fix the poetry.lock so the repo env works (currently everything verifies in the scratch venv).
+4. **After the 10th session (Fri 2026-09-11):** calibrate `liquidity.py` against measured spreads; formally pass/fail the Phase 0b gate; fix the poetry.lock so the repo env works (it is py3.10 and missing sqlalchemy, so only `--noconftest` options tests run locally; the VPS venv has no pytest).
 5. **Then Phase 3:** paper trading live on the capture feed — only for configs whose underlying signal survived step 3, plus one rejected config as the pipeline control.
 
 ### Standing decisions (do not re-litigate without new information)
