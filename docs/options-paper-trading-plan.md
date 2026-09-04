@@ -891,6 +891,9 @@ out-of-sample after deflation. Expect survivors to be few or none — none is a 
 per §3.4 the literature predicts exactly that. Options-level monetisation after §2.6 costs is
 then Phase 3's question, asked only for signals that survive here.
 
+> **Run and closed Fri 2026-09-04 — no config survives.** Full result, evidence and caveats in
+> §11 ("Phase 2 result"). Pre-registration commit `b7f8594`.
+
 ### Phase 3 — Forward paper trading
 
 Daily unattended run, 09:15–10:00, dashboard live. Survivors from Phase 2 plus, deliberately,
@@ -917,10 +920,11 @@ Everything below is something I cannot do for you. Ordered by what blocks what.
 | 3 | **Decide on expired-options data** | Phase 0c | ✅ resolved — withdrawn; replaced by the index-level signal test (Phase 2) |
 | 4 | **Approve the VPS reboot** | Phase 0a | ✅ done 2026-08-30 — updated, grub repaired, rebooted clean |
 | 5 | **Daily broker login** | Phase 3 | ✅ **automated 2026-08-30** — TOTP auto-login at 08:45 IST (user accepted the Zerodha-discourages trade-off; note: token expiry is 06:00 IST, not the ~07:30 Rev 2.0 stated). One-time app **Authorize** consent was clicked. Manual `/kite/login` browser flow remains as fallback |
+| 6 | **Decide what Phase 3 runs, now that Phase 2 produced no survivors** | Phase 3 | ⏳ **open, added 2026-09-04** — options (a)/(b)/(c) in §11 "Next steps" item 5 |
 
-All five are closed. The only recurring user involvement left is *watching Telegram* — ✅ at
-08:45, ▶️ at 09:15, ✔️ at ~10:00 on trading days — and acting on a ❌ (worst case: the manual
-browser login before 09:10).
+Tasks 1–5 are closed. Task 6 is new and is the only thing blocking Phase 3. The recurring user
+involvement remains *watching Telegram* — ✅ at 08:45, ▶️ at 09:15, ✔️ at ~10:00 on trading
+days — and acting on a ❌ (worst case: the manual browser login before 09:10).
 
 ## 11. Status ledger — read this first when resuming (as of Fri 2026-09-04, post-session)
 
@@ -968,14 +972,70 @@ ATM±100 (NIFTY) / ±200 (BANKNIFTY) on the nearest captured expiry, from 09:16 
   left as captured** — the offsite Telegram archive is immutable and must not diverge; exclude
   `feed_ts < '2000-01-01'` when analysing.
 
+### Phase 2 result — RUN AND CLOSED, Fri 2026-09-04: **no config survives**
+
+Pre-registered at commit `b7f8594` (signal definitions, thresholds, entry minutes, exit rule
+and the deflation count all fixed *before* a candle was fetched). Data: 710,887 NIFTY index
+minute candles over **1,904 sessions, 2019-01-01 .. 2026-09-03**, cached to
+`data/options/nifty_minute.db` (88 MB) by `app/options/histdata.py`. Held-out tail: the last
+6 months (125 sessions, 2026-03-04 .. 2026-09-03), touched exactly once.
+
+Four hypotheses, not six: `orb_naked`/`orb_synth` and `mom_naked`/`mom_synth` differ only in
+option structure, not in the directional claim, so Bonferroni is by 4.
+
+**The gate (held out, 125 sessions):**
+
+| Config | n | trigger | hit rate | p (1-sided) | Bonferroni | Verdict |
+|---|---|---|---|---|---|---|
+| `orb` | 88 | 70.4% | 53.41% | 0.2971 | 1.0000 | ELIMINATED |
+| `gap_cont` | 64 | 51.2% | 56.25% | 0.1909 | 0.7635 | ELIMINATED |
+| `gap_fade` | 43 | 34.4% | 46.51% | 0.7288 | 1.0000 | ELIMINATED |
+| `mom` | 50 | 40.0% | 64.00% | **0.0325** | 0.1298 | ELIMINATED |
+
+**In-sample (1,779 sessions, diagnostic only):** `orb` 48.04% over n=1,376; `gap_cont` 49.70%
+(n=833); `gap_fade` 50.00% (n=436); `mom` 51.85% (n=677). Walk-forward over four sequential
+folds shows no config holding a direction: `orb` runs 45.75 → 48.95 → 51.72 → 45.76, `mom`
+decays 54.26 → 50.78 → 51.47 → 50.62.
+
+Four things this result actually says, and one it does not:
+
+- **`mom` is exactly the case deflation exists for.** Its raw p of 0.0325 would have passed a
+  naive α=0.05 — but four hypotheses were tested, and 64% on n=50 is a burst, not an edge. Its
+  own in-sample record (51.85% over 677 triggers) and its decaying walk-forward both contradict
+  it, and its return t is only +0.75 despite the hit rate. Had we tested `mom` alone we would
+  now be building on noise.
+- **`orb` — the plan's headline signal — is the strongest number in the table, and it is
+  negative.** In-sample mean signed return −0.0138% with **t = −2.20** over 1,376 triggers. On
+  seven years of NIFTY, following the 09:15–09:30 range break has lost money at index level
+  before any cost is charged. That makes `orb` the natural choice for Phase 3's deliberately
+  rejected pipeline control.
+- **Direction and money are not the same question.** `mom` was in-sample *positive* on hit rate
+  (51.85%) and *negative* on return (t = −1.06): more hits, smaller wins. Any future gate must
+  keep reporting both.
+- **Fading `orb` is NOT now a candidate.** The inverse of a signal that tested negative is a
+  fifth hypothesis invented after seeing the data. Registering it now would be textbook
+  snooping and it is out of bounds without a fresh pre-registration and a fresh holdout.
+- **This does not say the configs lose money as options.** It says their directional premise is
+  unsupported. The mean signed index move at the gate is single-digit points on a ~24,000 index;
+  translating that through delta, spread and §2.6's 0.735% cost load requires the engine and is
+  Phase 3's question. Nothing here should be read as a P&L claim in either direction.
+
+Data-quality notes (found in the sanity check, none affecting the verdict): the cache contains
+7 Muhurat evening sessions (18:15–19:14 — no 09:15–10:00 window, so they generate no signals,
+though each does set the next day's gap reference), 4 Budget/special Saturday sessions, 2 NSE
+disaster-recovery sessions (2024-03-02, 2024-05-18) and the 2021-02-24 outage day (54 bars).
+Together 0.7% of sessions, and **none falls inside the held-out tail** — the gate is untouched.
+OHLC is internally consistent on all 710,887 rows; spot checks match the real index on the
+COVID lower-circuit day (2020-03-23) and election day (2024-06-04).
+
 ### Next steps, in order
 
 1. **Fri 2026-09-11 — the 10th session closes the Phase 0b gate** (Mon 14 Sep is Ganesh
    Chaturthi). Nothing to do until then but watch Telegram; the trend above is already stable.
 2. **Build Phase 1** (~700 LOC, no market dependency, can start any time): `engine.py`, `position.py`, `liquidity.py`, `strategies.py` (6 configs of §3.5), `metrics.py`, plus the single server-rendered progress page. Gates in § Phase 1.
-3. **Build + run the index-level signal test** (§ Phase 2 revised): fetch NIFTY minute candles via Kite historical API (included in the Rs 500/mo plan), hit-rate test of the 09:15–09:30 range break over the next 28 minutes, walk-forward, deflated. This is the project's statistical backbone now that the options backtest is withdrawn.
-4. **After the 10th session (Fri 2026-09-11):** calibrate `liquidity.py` against measured spreads; formally pass/fail the Phase 0b gate; fix the poetry.lock so the repo env works (it is py3.10 and missing sqlalchemy, so only `--noconftest` options tests run locally; the VPS venv has no pytest).
-5. **Then Phase 3:** paper trading live on the capture feed — only for configs whose underlying signal survived step 3, plus one rejected config as the pipeline control.
+3. ~~**Build + run the index-level signal test** (§ Phase 2 revised)~~ — **DONE Fri 2026-09-04.** See "Phase 2 result" above: all four hypotheses eliminated.
+4. **After the 10th session (Fri 2026-09-11):** calibrate `liquidity.py` against measured spreads; formally pass/fail the Phase 0b gate; fix the poetry.lock so the repo env works (it is py3.10 and missing sqlalchemy *and* httpx, so only `--noconftest` options tests run locally; the VPS venv has no pytest). While there, decouple `signal_test.py` from `histdata.py`'s top-level `import httpx` — pure analysis should not need an HTTP client.
+5. **Phase 3 — NEEDS A DECISION.** The gate produced no survivors, so the rule as written ("only for configs whose underlying signal survived step 3, plus one rejected config as the pipeline control") leaves Phase 3 with a control and nothing to control *for*. The honest options are: (a) run `orb` alone as the known-bad control, validating the live pipeline end-to-end while expecting to lose — the plan's own §5.2 says six months cannot confirm an edge anyway, so infrastructure validation was always the realistic deliverable; (b) pre-register a genuinely new hypothesis, on a signal family not yet tested, and re-run Phase 2 against a fresh holdout before any live paper trade; (c) stop at Phase 2 and keep only the capture feed running. Not on the list: re-testing a variant of a config that already failed.
 
 ### Standing decisions (do not re-litigate without new information)
 
